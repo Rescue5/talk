@@ -1,0 +1,93 @@
+schema_version = "0.1"
+updated_at = "2026-07-03"
+
+[project]
+name = "ore-microscopy-classification"
+status = "bootstrap"
+language = "ru"
+description = "Автоматическая классификация руды по микроскопическим изображениям полированных шлифов."
+
+[repository]
+root = "/Users/macbook/Documents/talk"
+initial_files = ["solution.py"]
+context_file = "AGENTS.md"
+environment_file = "environment.yml"
+project_structure_known = false
+do_not_infer_structure = true
+
+[environment]
+conda_env_name = "talk"
+python = "3.11"
+created = true
+preferred_run_prefix = "conda run -n talk"
+smoke_test = "passed_with_warnings"
+mps_available = false
+
+[environment.dependency_groups]
+cv = ["opencv-python-headless", "scikit-image", "pillow", "tifffile"]
+ml = ["pytorch", "torchvision", "scikit-learn"]
+segmentation = ["transformers", "segmentation-models-pytorch", "timm"]
+experiments = ["jupyterlab", "ipykernel", "pytest"]
+
+[environment.notes]
+opencv_source = "pip opencv-python-headless; conda opencv was removed after libjxl/protobuf import conflicts"
+torchvision_io_warning = "torchvision imports, but torchvision.io image extension warns about missing libjpeg.9.dylib"
+image_io_preference = "Use cv2, Pillow, or tifffile unless torchvision.io is explicitly tested"
+
+[data]
+expected_labeled_images = 43
+raw_data_present = false
+annotation_granularity = "image-level classes plus coarse talc zones; no sulfide object-level masks confirmed"
+split_policy = "split by source sample before tile extraction"
+
+[pipeline_context]
+implementation_requested = false
+large_image_strategy = "tile-based processing"
+sulfide_segmentation_mvp = "classical CV by brightness, color/reflectance, morphology, connected components"
+sulfide_region_classification = "geometry, texture, dark internal regions, neighborhood statistics, pretrained embeddings, weak supervision or MIL if needed"
+talc_zone_model = "SegFormer for coarse talc zones"
+talc_candidate_method = "local dark dispersed regions inside predicted talc zones"
+image_classifier_inputs = "segmentation masks, region statistics, RGB image features"
+interpretability_outputs = ["sulfide masks", "ordinary intergrowth masks", "fine intergrowth masks", "talc zone masks", "talc candidate masks", "final class", "overlay"]
+
+[cv_branch_focus]
+scope = "CV algorithms for post-processing SegFormer talc-zone predictions"
+segformer_role = "coarse search region only"
+target_output = "separate high-precision mask of talc-phase candidates inside the SegFormer zone"
+precision_priority = "high"
+recall_priority = "secondary"
+candidate_signal = "locally dark talc-like regions relative to local surroundings"
+methods = ["local darkness", "multi-scale black-hat", "multi-scale DoG", "morphology", "connected components"]
+reject_patterns = ["noise", "shadows", "cracks", "scratches", "overly elongated components"]
+
+[modeling_constraints]
+use_pretrained_models = true
+use_patch_based_training = true
+avoid_tile_leakage = true
+treat_coarse_masks_as_noisy = true
+minimize_manual_object_annotations = true
+
+[[updates]]
+date = "2026-07-03"
+summary = "Созданы AGENTS.md, environment.yml и project.toml; проектный контекст зафиксирован без запуска реализации пайплайна."
+files = ["AGENTS.md", "environment.yml", "project.toml"]
+
+[[updates]]
+date = "2026-07-03"
+summary = "Имя conda-окружения изменено на talk по просьбе пользователя."
+files = ["AGENTS.md", "environment.yml", "project.toml"]
+
+[[updates]]
+date = "2026-07-03"
+summary = "Удалена предположительная структура проекта; зафиксировано правило не выдумывать структуру без фактов или явного указания."
+files = ["AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-03"
+summary = "Conda-окружение talk создано; OpenCV переведён на pip opencv-python-headless после конфликтов conda OpenCV с libjxl/protobuf."
+files = ["AGENTS.md", "environment.yml", "project.toml"]
+
+[[updates]]
+date = "2026-07-03"
+summary = "Зафиксирован фокус текущей ветки: high-precision CV post-processing SegFormer зоны оталькования для маски талькоподобных кандидатов."
+files = ["AGENTS.md", "project.toml"]
