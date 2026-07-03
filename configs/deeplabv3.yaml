@@ -1,0 +1,31 @@
+model:
+  name: deeplabv3
+  encoder_name: resnet34
+  encoder_weights: imagenet
+  encoder_depth: 5
+  decoder_channels: 256
+
+data:
+  data_dir: /Users/maksimpishulin/Downloads/project-2-at-2026-07-03-17-30-6e1c5f6a
+  classes_file: classes.txt
+  task: binary
+  image_size: 512
+  tile_size: 512
+  tile_overlap: 0.33
+  val_fraction: 0.25
+  split_file: artifacts/splits.json
+  repeat_factor: 1
+
+train:
+  epochs: 50
+  batch_size: 2
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  num_workers: 0
+  freeze_encoder_epochs: 5
+  seed: 42
+  amp: true
+  output_dir: runs
+  threshold: 0.5
+  bce_weight: 0.5
+  dice_weight: 0.5
