@@ -1,6 +1,7 @@
 name: talk
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - defaults
 dependencies:
@@ -16,14 +17,17 @@ dependencies:
   - matplotlib>=3.8
   - seaborn>=0.13
   - tqdm>=4.66
+  - tensorboard>=2.16
   - pydantic>=2.7
   - pyyaml>=6.0
   - tomli-w>=1.0
   - pytest>=8.0
   - jupyterlab>=4.2
   - ipykernel>=6.29
-  - pytorch>=2.3
-  - torchvision>=0.18
+  - pytorch=2.3.1=py3.11_cuda12.1_cudnn8_0
+  - torchvision=0.18.1=py311_cu121
+  - pytorch-mutex=1.0=cuda
+  - pytorch-cuda=12.1
   - pip:
       - albumentations>=1.4
       - accelerate>=0.33
