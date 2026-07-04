@@ -3,7 +3,7 @@ updated_at = "2026-07-03"
 
 [project]
 name = "ore-microscopy-classification"
-status = "bootstrap"
+status = "cv_post_segformer_mvp"
 language = "ru"
 description = "Автоматическая классификация руды по микроскопическим изображениям полированных шлифов."
 
@@ -14,6 +14,8 @@ context_file = "AGENTS.md"
 environment_file = "environment.yml"
 project_structure_known = false
 do_not_infer_structure = true
+known_package = "cv_analysis"
+implemented_files = ["cv_analysis/__init__.py", "cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml"]
 
 [environment]
 conda_env_name = "talk"
@@ -60,6 +62,20 @@ candidate_signal = "locally dark talc-like regions relative to local surrounding
 methods = ["local darkness", "multi-scale black-hat", "multi-scale DoG", "morphology", "connected components"]
 reject_patterns = ["noise", "shadows", "cracks", "scratches", "overly elongated components"]
 
+[cv_post_segformer_module]
+module = "cv_analysis.post_segformer"
+default_config = "cv_analysis/post_segformer.yaml"
+public_class = "TalcCVPipeline"
+public_constructor = "TalcCVPipeline.from_yaml(path)"
+input = "RGB image array HxWx3; SegFormer output is not handled here"
+output = "uint8 binary mask HxW with values 0/1"
+implemented_processors = ["prepare_image", "local_darkness", "multiscale_blackhat", "normalize_features", "confidence_fusion", "hysteresis", "morphology_cleanup", "component_filter"]
+segformer_dependency = false
+uses_dynamic_imports = false
+uses_torch_module = false
+smoke_check = "passed: synthetic round dark spot retained; elongated scratch rejected"
+notes = "Added explicit black-hat normalization parameters to YAML because per-scale robust normalization needs numeric parameters."
+
 [modeling_constraints]
 use_pretrained_models = true
 use_patch_based_training = true
@@ -91,3 +107,8 @@ files = ["AGENTS.md", "environment.yml", "project.toml"]
 date = "2026-07-03"
 summary = "Зафиксирован фокус текущей ветки: high-precision CV post-processing SegFormer зоны оталькования для маски талькоподобных кандидатов."
 files = ["AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-03"
+summary = "Реализован модуль cv_analysis.post_segformer с последовательным YAML-настраиваемым CV pipeline для тёмных талькоподобных кандидатов."
+files = ["cv_analysis/__init__.py", "cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml", "AGENTS.md", "project.toml"]

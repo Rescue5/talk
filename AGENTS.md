@@ -14,6 +14,9 @@
 - Созданное conda-окружение: `talk`.
 - Воспроизводимый spec окружения: `environment.yml`.
 - Машинно-читаемый проектный контекст и конфиг: `project.toml`.
+- Реализован пакет `cv_analysis` для CV-алгоритмов текущей ветки.
+- Основной модуль текущей ветки: `cv_analysis.post_segformer`.
+- Дефолтная YAML-конфигурация CV post-processing: `cv_analysis/post_segformer.yaml`.
 
 ## Проектный контекст
 
@@ -50,6 +53,21 @@ SegFormer используется только как источник груб
 - connected components analysis.
 
 Критерий качества для этого этапа смещён в сторону высокого precision. Лучше пропустить сомнительные участки, чем добавлять шум. Нужно отбрасывать шум, тени, трещины, царапины и слишком вытянутые компоненты.
+
+Реализованный публичный интерфейс:
+
+```python
+from cv_analysis.post_segformer import TalcCVPipeline
+
+pipeline = TalcCVPipeline.from_yaml("cv_analysis/post_segformer.yaml")
+mask = pipeline(image_rgb)
+```
+
+`image_rgb` должен быть массивом `H x W x 3`. Модуль не реализует SegFormer и не связан с конкретной моделью; вход трактуется как уже выбранная область поиска. Возвращаемая маска имеет форму `H x W` и dtype `uint8` со значениями `0/1`.
+
+В `cv_analysis.post_segformer` реализованы последовательные обработчики: подготовка изображения, локальная темнота, multi-scale black-hat, robust-нормализация признаков, fusion confidence, hysteresis через connected components, консервативная морфологическая очистка и фильтрация компонент.
+
+В YAML добавлены параметры robust-нормализации для `multiscale_blackhat`, потому что инструкция требует нормализовать каждый scale до объединения и держать численные параметры в YAML.
 
 ## Рабочие правила
 
