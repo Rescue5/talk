@@ -475,7 +475,7 @@ input[type=range]::-webkit-slider-thumb { appearance: none; width: 13px; height:
 .settings-error { margin: 0 0 9px; color: #9b3e28; font-size: 9px; }
 .text-button { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; }
 .text-button:hover { color: var(--accent-dark); }
-.charts { display: grid; gap: 19px; }
+.charts { display: grid; gap: 5px; }
 .mini-chart, .timing-chart { margin: 0; }
 .mini-chart figcaption, .timing-chart figcaption { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 9px; color: var(--muted); }
 .mini-chart figcaption strong, .timing-chart figcaption strong { color: var(--ink); font: 500 11px/1 'IBM Plex Mono', monospace; }
