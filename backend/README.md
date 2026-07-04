@@ -41,6 +41,8 @@ Environment:
   masks and records the SAM warning in `result.json`.
 - `SULFIDE_SAM_DEVICE=auto|cpu|cuda` — MobileSAM device; defaults to
   `MODEL_DEVICE`.
+- `CV_NUM_THREADS` — OpenCV thread count for CPU-heavy CV stages; defaults to
+  8 in Compose.
 - `TALC_SOURCE_PATH`, `SULFIDE_SOURCE_PATH` — optional source overrides.
 - `MODEL_DEVICE=auto|cpu|cuda` — sulfide model device; defaults to `auto`.
 - `MAX_UPLOAD_BYTES` — maximum bytes per uploaded file; defaults to 100 MiB.
@@ -117,7 +119,9 @@ Job progress stages are `upload`, `talc_segmentation`, `cv_refinement`,
 `sulfide_segmentation`, `sulfide_classification`, `export`, then `completed`
 (or an error status).
 Inference jobs are serialized in a one-worker queue to keep model memory usage
-bounded.
+bounded. The queue starts by eagerly preloading the talc model, sulfide
+classifier, sulfide CV config, and optional MobileSAM checkpoint so the first
+uploaded image does not pay the model-loading cost.
 
 Settings changes use the earliest affected cached stage:
 

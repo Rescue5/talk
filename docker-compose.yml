@@ -17,6 +17,7 @@ services:
       SULFIDE_CHECKPOINT_PATH: /models/${SULFIDE_CHECKPOINT_FILE:-sulfide.pt}
       SULFIDE_SAM_CHECKPOINT_PATH: /models/${SULFIDE_SAM_CHECKPOINT_FILE:-mobile_sam.pt}
       SULFIDE_SAM_DEVICE: ${SULFIDE_SAM_DEVICE:-auto}
+      CV_NUM_THREADS: ${CV_NUM_THREADS:-8}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-536870912}
     volumes:
       - type: bind

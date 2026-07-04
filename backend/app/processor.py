@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import random
 import sys
 import threading
@@ -19,6 +20,11 @@ from .config import ServiceConfig
 from .schemas import JobSettings
 
 StageCallback = Callable[[str, float, str | None], None]
+PNG_SAVE_OPTIONS = {"compress_level": 1}
+
+
+def save_png(path: Path, array: np.ndarray) -> None:
+    Image.fromarray(array).save(path, **PNG_SAVE_OPTIONS)
 
 
 def save_semantic_overlays(
@@ -38,13 +44,13 @@ def save_semantic_overlays(
         cv2.CHAIN_APPROX_SIMPLE,
     )
     cv2.drawContours(coarse_rgba, contours, -1, (255, 210, 0, 255), 2)
-    Image.fromarray(coarse_rgba).save(output_dir / "coarse_overlay.png")
+    save_png(output_dir / "coarse_overlay.png", coarse_rgba)
 
     talc_rgba = np.zeros((height, width, 4), dtype=np.uint8)
     talc_rgba[refined_talc_mask.astype(bool)] = np.asarray(
         [255, 40, 40, 180], dtype=np.uint8
     )
-    Image.fromarray(talc_rgba).save(output_dir / "talc_overlay.png")
+    save_png(output_dir / "talc_overlay.png", talc_rgba)
 
     if sulfide_cv_mask is not None:
         _save_rgba_mask_layer(
@@ -65,7 +71,7 @@ def _save_rgba_mask_layer(
 ) -> None:
     rgba = np.zeros((*mask.shape, 4), dtype=np.uint8)
     rgba[mask.astype(bool)] = color_rgba
-    Image.fromarray(rgba).save(path)
+    save_png(path, rgba)
 
 
 def _as_binary_uint8(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
@@ -108,13 +114,13 @@ def _save_sulfide_artifacts(
     sulfide_cv_mask: np.ndarray,
     sulfide_sam_mask: np.ndarray | None,
 ) -> dict[str, str]:
-    Image.fromarray(sulfide_cv_mask).save(output_dir / "sulfide_cv_mask.png")
+    save_png(output_dir / "sulfide_cv_mask.png", sulfide_cv_mask)
     artifacts = {
         "sulfide_cv_mask": "sulfide_cv_mask.png",
         "sulfide_cv_overlay": "sulfide_cv_overlay.png",
     }
     if sulfide_sam_mask is not None:
-        Image.fromarray(sulfide_sam_mask).save(output_dir / "sulfide_sam_mask.png")
+        save_png(output_dir / "sulfide_sam_mask.png", sulfide_sam_mask)
         artifacts["sulfide_sam_mask"] = "sulfide_sam_mask.png"
         artifacts["sulfide_sam_overlay"] = "sulfide_sam_overlay.png"
     return artifacts
@@ -276,6 +282,44 @@ def _add_source_path(path: Path, package: str) -> None:
     importlib.invalidate_caches()
 
 
+def _configure_cv_runtime() -> None:
+    try:
+        import cv2
+
+        cv2.setUseOptimized(True)
+        default_threads = max(1, min(os.cpu_count() or 1, 8))
+        threads = int(os.getenv("CV_NUM_THREADS", str(default_threads)))
+        cv2.setNumThreads(max(1, threads))
+    except Exception:
+        pass
+
+
+def _configure_torch_inference(torch_module: Any, device: Any) -> None:
+    if not str(device).startswith("cuda"):
+        return
+    torch_module.backends.cudnn.benchmark = True
+    try:
+        torch_module.set_float32_matmul_precision("high")
+    except Exception:
+        pass
+
+
+def _warmup_torch_model(
+    torch_module: Any,
+    model: Any,
+    device: Any,
+    input_shape: tuple[int, ...],
+) -> None:
+    if not str(device).startswith("cuda"):
+        return
+    try:
+        with torch_module.inference_mode():
+            model(torch_module.zeros(input_shape, device=device))
+            torch_module.cuda.synchronize(device)
+    except Exception:
+        pass
+
+
 class SulfideClassifier:
     def __init__(self, config: ServiceConfig) -> None:
         _add_source_path(config.sulfide_source_path, "sulfide")
@@ -303,9 +347,19 @@ class SulfideClassifier:
         if requested == "cuda" and not torch.cuda.is_available():
             raise ModelUnavailable("sulfide", "cuda_requested_but_unavailable")
         self.device = torch.device(requested)
+        _configure_torch_inference(torch, self.device)
         self.torch = torch
         self.model = model.to(self.device).eval()
         self.config = model_config
+        data_config = model_config.get("data", {})
+        image_size = int(data_config.get("image_size", 384))
+        view_count = int(data_config.get("num_local_crops", 8)) + 1
+        _warmup_torch_model(
+            torch,
+            self.model,
+            self.device,
+            (1, view_count, 3, image_size, image_size),
+        )
 
     def predict(self, image_rgb: np.ndarray, threshold: float) -> dict[str, Any]:
         from ore_classifier.dataset import make_views
@@ -351,6 +405,7 @@ class InferenceProcessor:
 
     def __init__(self, config: ServiceConfig) -> None:
         self.config = config
+        _configure_cv_runtime()
         self._talc_analyzer: Any | None = None
         self._sulfide_classifier: SulfideClassifier | None = None
         self._sulfide_segmentation_config: dict[str, Any] | None = None
@@ -368,6 +423,22 @@ class InferenceProcessor:
 
                 self._talc_analyzer = TalcAnalyzer.from_files(
                     checkpoint, self.config.talc_config_path
+                )
+                import torch
+
+                _configure_torch_inference(
+                    torch, self._talc_analyzer.segmenter.device
+                )
+                _warmup_torch_model(
+                    torch,
+                    self._talc_analyzer.segmenter.model,
+                    self._talc_analyzer.segmenter.device,
+                    (
+                        1,
+                        3,
+                        self._talc_analyzer.segmenter.checkpoint.image_size,
+                        self._talc_analyzer.segmenter.checkpoint.image_size,
+                    ),
                 )
             return self._talc_analyzer
 
@@ -431,10 +502,23 @@ class InferenceProcessor:
                     import torch
 
                     device = "cuda" if torch.cuda.is_available() else "cpu"
+                else:
+                    import torch
+
+                _configure_torch_inference(torch, device)
                 self._sulfide_sam_refiner = MobileSamRefiner(
                     checkpoint=checkpoint,
                     device=device,
                 )
+                if str(device).startswith("cuda"):
+                    try:
+                        with torch.inference_mode():
+                            self._sulfide_sam_refiner.predictor.set_image(
+                                np.zeros((256, 256, 3), dtype=np.uint8)
+                            )
+                            torch.cuda.synchronize(device)
+                    except Exception:
+                        pass
                 self._sulfide_sam_error = None
             except Exception as exc:
                 self._sulfide_sam_error = {
@@ -443,6 +527,26 @@ class InferenceProcessor:
                 }
                 self._sulfide_sam_refiner = None
             return self._sulfide_sam_refiner, self._sulfide_sam_error
+
+    def preload(self) -> None:
+        if self.config.demo_mode:
+            return
+        try:
+            self._talc()
+        except ModelUnavailable:
+            pass
+        try:
+            self._sulfide_segmentation_tools()
+        except ModelUnavailable:
+            pass
+        try:
+            self._sulfide_sam()
+        except ModelUnavailable:
+            pass
+        try:
+            self._sulfide()
+        except ModelUnavailable:
+            pass
 
     def process(
         self,
@@ -744,8 +848,8 @@ class InferenceProcessor:
 
         progress("export", 0.9, "Saving masks, overlay, confidence and statistics")
         output_dir.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(image).save(output_dir / "original.png")
-        result.save(output_dir, overwrite=True)
+        save_png(output_dir / "original.png", image)
+        result.save(output_dir, overwrite=True, write_manifest=False)
         save_semantic_overlays(
             output_dir,
             segmentation.mask,
@@ -778,7 +882,7 @@ class InferenceProcessor:
                 json_safe(final_manifest),
                 stream,
                 ensure_ascii=False,
-                indent=2,
+                separators=(",", ":"),
                 allow_nan=False,
             )
             stream.write("\n")
@@ -889,7 +993,13 @@ class InferenceProcessor:
         )
         progress("export", 0.8, "Saving updated classification")
         with manifest_path.open("w", encoding="utf-8") as stream:
-            json.dump(manifest, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dump(
+                manifest,
+                stream,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
             stream.write("\n")
         progress("export", 1.0, "Cached reclassification completed")
         talc_public = {
@@ -1001,16 +1111,18 @@ class InferenceProcessor:
 
         progress("export", 0.9, "DEMO: saving illustrative artifacts")
         output_dir.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(image).save(output_dir / "original.png")
-        Image.fromarray(segmentation.astype(np.uint8) * 255).save(
-            output_dir / "segmentation_mask.png"
+        save_png(output_dir / "original.png", image)
+        save_png(
+            output_dir / "segmentation_mask.png",
+            segmentation.astype(np.uint8) * 255,
         )
-        Image.fromarray(refined.astype(np.uint8) * 255).save(
-            output_dir / "refined_talc_mask.png"
+        save_png(
+            output_dir / "refined_talc_mask.png",
+            refined.astype(np.uint8) * 255,
         )
         overlay = image.copy()
         overlay[refined] = np.array([255, 40, 40], dtype=np.uint8)
-        Image.fromarray(overlay).save(output_dir / "overlay.png")
+        save_png(output_dir / "overlay.png", overlay)
         save_semantic_overlays(
             output_dir,
             segmentation,
@@ -1023,7 +1135,7 @@ class InferenceProcessor:
             sulfide_cv_mask,
             sulfide_sam_mask,
         )
-        np.savez_compressed(
+        np.savez(
             output_dir / "confidence_maps.npz",
             segmentation_confidence=segmentation.astype(np.float32),
             cv_confidence=refined.astype(np.float32),
@@ -1069,7 +1181,7 @@ class InferenceProcessor:
             },
         }
         with (output_dir / "result.json").open("w", encoding="utf-8") as stream:
-            json.dump(manifest, stream, ensure_ascii=False, indent=2)
+            json.dump(manifest, stream, ensure_ascii=False, separators=(",", ":"))
             stream.write("\n")
         progress("export", 1.0, "DEMO image processing completed")
         return {

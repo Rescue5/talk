@@ -34,10 +34,19 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
             json_safe(payload),
             stream,
             ensure_ascii=False,
-            indent=2,
+            separators=(",", ":"),
             allow_nan=False,
         )
         stream.write("\n")
+
+
+PNG_COMPRESSION = 1
+
+
+def write_png(path: Path, image: np.ndarray) -> None:
+    params = [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION]
+    if not cv2.imwrite(str(path), image, params):
+        raise OSError(f"Could not write {path}")
 
 
 @dataclass
@@ -51,7 +60,13 @@ class AnalysisResult:
     vote_count: np.ndarray
     statistics: dict[str, Any]
 
-    def save(self, output_dir: str | Path, overwrite: bool = False) -> Path:
+    def save(
+        self,
+        output_dir: str | Path,
+        overwrite: bool = False,
+        *,
+        write_manifest: bool = True,
+    ) -> Path:
         started = perf_counter()
         destination = Path(output_dir)
         artifact_names = {
@@ -74,14 +89,8 @@ class AnalysisResult:
 
         coarse_path = destination / artifact_names["segmentation_mask"]
         refined_path = destination / artifact_names["refined_talc_mask"]
-        if not cv2.imwrite(
-            str(coarse_path), self.segmentation_mask.astype(np.uint8) * 255
-        ):
-            raise OSError(f"Could not write {coarse_path}")
-        if not cv2.imwrite(
-            str(refined_path), self.refined_talc_mask.astype(np.uint8) * 255
-        ):
-            raise OSError(f"Could not write {refined_path}")
+        write_png(coarse_path, self.segmentation_mask.astype(np.uint8) * 255)
+        write_png(refined_path, self.refined_talc_mask.astype(np.uint8) * 255)
 
         overlay = self.image_rgb.copy()
         refined = self.refined_talc_mask.astype(bool)
@@ -97,12 +106,9 @@ class AnalysisResult:
         )
         cv2.drawContours(overlay, contours, -1, (255, 210, 0), 2)
         overlay_path = destination / artifact_names["overlay"]
-        if not cv2.imwrite(
-            str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-        ):
-            raise OSError(f"Could not write {overlay_path}")
+        write_png(overlay_path, cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
-        np.savez_compressed(
+        np.savez(
             destination / artifact_names["confidence_maps"],
             segmentation_confidence=self.segmentation_confidence.astype(np.float32),
             cv_confidence=self.cv_confidence.astype(np.float32),
@@ -115,7 +121,8 @@ class AnalysisResult:
         timings = manifest.setdefault("timings_seconds", {})
         timings["serialization"] = serialization_seconds
         timings["total"] = float(timings.get("processing_total", 0.0)) + serialization_seconds
-        write_json(destination / artifact_names["result"], manifest)
+        if write_manifest:
+            write_json(destination / artifact_names["result"], manifest)
         self.statistics = manifest
         return destination
 

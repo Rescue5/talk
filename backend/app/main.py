@@ -162,6 +162,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        manager.startup()
         yield
         manager.shutdown()
 

@@ -31,6 +31,11 @@ class JobManager:
             max_workers=1, thread_name_prefix="ore-inference"
         )
 
+    def startup(self) -> None:
+        preload = getattr(self.processor, "preload", None)
+        if callable(preload):
+            self.executor.submit(preload)
+
     def submit(
         self,
         job_id: str,
