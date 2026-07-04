@@ -80,8 +80,13 @@ implemented_processors = ["prepare_image", "local_darkness", "multiscale_blackha
 segformer_dependency = "requires SegFormer output mask as input; does not run a SegFormer model"
 uses_dynamic_imports = false
 uses_torch_module = false
-smoke_check = "passed: synthetic round dark spot retained; elongated scratch rejected"
+smoke_check = "passed on both data examples: output is uint8 0/1, shape matches input, and mask is constrained to SegFormer area"
 notes = "Added explicit black-hat normalization parameters to YAML because per-scale robust normalization needs numeric parameters."
+fusion_features = ["local_log_darkness_norm", "local_zscore_norm", "blackhat_max_norm", "blackhat_persistence"]
+blackhat_persistence_policy = "Use raw blackhat_persistence in confidence_fusion; do not normalize it again in normalize_features."
+hysteresis_seed_strategy = "Create seeds from confidence plus evidence, or from a single strong primary response when strong_response_threshold is set."
+component_shape_filter_policy = "Skip elongation and solidity checks for components smaller than shape_filter_min_area."
+final_filter_policy = "Soft final filtering: keep area bounds broad, disable confidence/persistence post-filtering by default, and allow small components after hysteresis."
 
 [modeling_constraints]
 use_pretrained_models = true
@@ -134,3 +139,8 @@ files = ["cv_analysis/post_segformer.py", "AGENTS.md", "project.toml"]
 date = "2026-07-04"
 summary = "Структура данных обновлена: изображения находятся в data/img, соответствующие YOLO-segmentation txt-разметки грубой зоны оталькования находятся в data/labels; cv.ipynb собирает image_rgb и segformer_mask из этой структуры."
 files = ["cv.ipynb", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Adjusted SegFormer post-processing: fusion now uses raw blackhat_persistence, hysteresis can seed from a single strong response, component shape filters are skipped for tiny components, and final filtering is soft."
+files = ["cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml", "AGENTS.md", "project.toml"]

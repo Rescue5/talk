@@ -69,6 +69,8 @@ mask = pipeline(image_rgb, segformer_mask)
 
 В YAML добавлены параметры robust-нормализации для `multiscale_blackhat`, потому что инструкция требует нормализовать каждый scale до объединения и держать численные параметры в YAML.
 
+Текущая логика fusion/hysteresis/filtering: `blackhat_persistence` используется как уже нормированный признак и не проходит повторную `normalize_features`; `confidence_fusion` объединяет weighted mean и strongest primary response. `HysteresisSegmentation` может создавать seed не только по общей confidence, но и по одному сильному primary-признаку через `strong_response_threshold`, а также сохраняет `grow_mask` в state. `ComponentFilter` имеет `shape_filter_min_area` и не применяет elongation/solidity-фильтры к компонентам меньше этого порога; финальная фильтрация настроена мягко, чтобы не срезать мелкие кандидаты после hysteresis.
+
 ## Рабочие правила
 
 - Обновлять этот файл при появлении новых устойчивых фактов о структуре проекта, данных, окружении, соглашениях или пайплайне.
