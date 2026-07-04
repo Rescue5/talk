@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "talc-analysis"
+version = "0.1.0"
+description = "Talc segmentation, CV refinement, statistics, and export"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "numpy>=1.26,<3",
+  "torch>=2.3,<3",
+  "torchvision>=0.18,<1",
+  "segmentation-models-pytorch>=0.5,<0.6",
+  "opencv-python-headless>=4.10,<5",
+  "Pillow>=10,<13",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+talc-analyze = "talc_analysis.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["talc_analysis*"]
+
+[tool.setuptools.package-data]
+talc_analysis = ["default_config.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
