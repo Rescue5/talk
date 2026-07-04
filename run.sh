@@ -67,21 +67,32 @@ is_linux() {
 }
 
 read_key() {
-  local key
+  local key rest
+
   IFS= read -rsn1 key < /dev/tty || true
 
-  if [[ "$key" == $'\x1b' ]]; then
-    IFS= read -rsn2 -t 0.1 key < /dev/tty || true
-    case "$key" in
-      "[A") echo "up" ;;
-      "[B") echo "down" ;;
-      *) echo "esc" ;;
-    esac
-  elif [[ "$key" == "" ]]; then
-    echo "enter"
-  else
-    echo "$key"
-  fi
+  case "$key" in
+    $'\x1b')
+      # Стрелки приходят как escape-последовательности:
+      # ↑ = ESC [ A
+      # ↓ = ESC [ B
+      # На macOS Bash 3.2 дробный timeout типа -t 0.1 может ломаться,
+      # поэтому используем целый timeout.
+      IFS= read -rsn2 -t 1 rest < /dev/tty || true
+
+      case "$rest" in
+        "[A") echo "up" ;;
+        "[B") echo "down" ;;
+        *) echo "esc" ;;
+      esac
+      ;;
+    "")
+      echo "enter"
+      ;;
+    *)
+      echo "$key"
+      ;;
+  esac
 }
 
 select_menu() {
@@ -135,6 +146,23 @@ EOF
       enter)
         printf "%s\n" "$selected"
         return 0
+        ;;
+      esc)
+        # ничего не делаем
+        ;;
+      *)
+        # можно добавить альтернативное управление для терминалов без стрелок
+        if [[ "$key" == "j" ]]; then
+          ((selected++)) || true
+          if (( selected >= ${#options[@]} )); then
+            selected=0
+          fi
+        elif [[ "$key" == "k" ]]; then
+          ((selected--)) || true
+          if (( selected < 0 )); then
+            selected=$((${#options[@]} - 1))
+          fi
+        fi
         ;;
     esac
   done
@@ -326,7 +354,16 @@ main() {
   echo
 
   info "Собираю и запускаю контейнеры..."
-  docker compose "${compose_args[@]}" up --build -d
+  if ! docker compose "${compose_args[@]}" up --build -d; then
+    echo
+    warn "Docker не смог собрать или запустить контейнеры."
+    if is_macos; then
+      warn "Если выше есть 'error getting credentials', перезапусти Docker Desktop."
+      warn "Если это не помогло: docker logout, затем docker login."
+      warn "Для публичных образов также можно удалить поле credsStore из ~/.docker/config.json."
+    fi
+    exit 1
+  fi
   echo
 
   success "Готово!"

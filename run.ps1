@@ -57,18 +57,18 @@ function Read-WithDefault([string]$Prompt, [string]$Default) {
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker не найден. Установите и запустите Docker Desktop."
+    throw "Docker was not found. Install and start Docker Desktop."
 }
 docker compose version *> $null
 if ($LASTEXITCODE -ne 0) {
-    throw "Docker Compose v2 недоступен."
+    throw "Docker Compose v2 is not available."
 }
 
 Write-Header
-Write-Host "Выберите режим inference:"
+Write-Host "Select inference mode:"
 Write-Host "  1. CPU"
 Write-Host "  2. CUDA / NVIDIA GPU"
-$modeChoice = Read-Host "Режим [1]"
+$modeChoice = Read-Host "Mode [1]"
 if ([string]::IsNullOrWhiteSpace($modeChoice)) { $modeChoice = "1" }
 
 $composeFiles = @("-f", "docker-compose.yml")
@@ -79,36 +79,36 @@ if ($modeChoice -eq "2") {
     $modeDevice = "cuda"
     $modeLabel = "CUDA"
     if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
-        Write-Warning "nvidia-smi не найден. Проверьте NVIDIA Container Toolkit."
+        Write-Warning "nvidia-smi was not found. Check NVIDIA Container Toolkit."
     }
 }
 
 $defaultModelDir = Join-Path $HOME "models"
-$appHost = Read-WithDefault "APP_HOST (127.0.0.1 только локально)" (Read-EnvValue "APP_HOST" "127.0.0.1")
+$appHost = Read-WithDefault "APP_HOST (use 127.0.0.1 for local access only)" (Read-EnvValue "APP_HOST" "127.0.0.1")
 $appPort = Read-WithDefault "APP_PORT" (Read-EnvValue "APP_PORT" "8080")
 if ($appPort -notmatch "^\d+$" -or [int]$appPort -lt 1 -or [int]$appPort -gt 65535) {
-    throw "APP_PORT должен быть числом от 1 до 65535."
+    throw "APP_PORT must be a number from 1 to 65535."
 }
-$modelDir = Read-WithDefault "MODEL_DIR (папка с весами)" (Read-EnvValue "MODEL_DIR" $defaultModelDir)
+$modelDir = Read-WithDefault "MODEL_DIR (directory containing model weights)" (Read-EnvValue "MODEL_DIR" $defaultModelDir)
 $talcCheckpoint = Read-WithDefault "TALC_CHECKPOINT_FILE" (Read-EnvValue "TALC_CHECKPOINT_FILE" "talc.pt")
 $sulfideCheckpoint = Read-WithDefault "SULFIDE_CHECKPOINT_FILE" (Read-EnvValue "SULFIDE_CHECKPOINT_FILE" "sulfide.pt")
 
 Write-Header
-Write-Host "Режим:              $modeLabel"
-Write-Host "Адрес:              http://localhost:$appPort"
+Write-Host "Mode:                $modeLabel"
+Write-Host "Address:             http://localhost:$appPort"
 Write-Host "MODEL_DIR:          $modelDir"
 Write-Host "Talc checkpoint:    $talcCheckpoint"
 Write-Host "Sulfide checkpoint: $sulfideCheckpoint"
 Write-Host
 
 if (-not (Test-Path $modelDir -PathType Container)) {
-    Write-Warning "MODEL_DIR не существует; анализ будет недоступен до добавления весов."
+    Write-Warning "MODEL_DIR does not exist; analysis will be unavailable until model weights are added."
 } else {
     if (-not (Test-Path (Join-Path $modelDir $talcCheckpoint))) {
-        Write-Warning "Не найден $talcCheckpoint"
+        Write-Warning "$talcCheckpoint was not found."
     }
     if (-not (Test-Path (Join-Path $modelDir $sulfideCheckpoint))) {
-        Write-Warning "Не найден $sulfideCheckpoint"
+        Write-Warning "$sulfideCheckpoint was not found."
     }
 }
 
@@ -125,18 +125,18 @@ Set-EnvValue "TALC_CHECKPOINT_FILE" $talcCheckpoint
 Set-EnvValue "SULFIDE_CHECKPOINT_FILE" $sulfideCheckpoint
 Set-EnvValue "MODEL_DEVICE" $modeDevice
 
-Write-Host "Проверяю конфигурацию..." -ForegroundColor Cyan
+Write-Host "Validating configuration..." -ForegroundColor Cyan
 & docker compose @composeFiles config --quiet
-if ($LASTEXITCODE -ne 0) { throw "Некорректная Docker Compose конфигурация." }
+if ($LASTEXITCODE -ne 0) { throw "Invalid Docker Compose configuration." }
 
-Write-Host "Собираю и запускаю контейнеры..." -ForegroundColor Cyan
+Write-Host "Building and starting containers..." -ForegroundColor Cyan
 & docker compose @composeFiles up --build -d
-if ($LASTEXITCODE -ne 0) { throw "Не удалось запустить приложение." }
+if ($LASTEXITCODE -ne 0) { throw "Failed to start the application." }
 
 $url = "http://localhost:$appPort"
 Write-Host
-Write-Host "Готово: $url" -ForegroundColor Green
-$openBrowser = Read-Host "Открыть приложение в браузере? [Y/n]"
-if ([string]::IsNullOrWhiteSpace($openBrowser) -or $openBrowser -match "^[YyДд]") {
+Write-Host "Ready: $url" -ForegroundColor Green
+$openBrowser = Read-Host "Open the application in a browser? [Y/n]"
+if ([string]::IsNullOrWhiteSpace($openBrowser) -or $openBrowser -match "^[Yy]") {
     Start-Process $url
 }
