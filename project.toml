@@ -3,7 +3,7 @@ updated_at = "2026-07-04"
 
 [project]
 name = "ore-microscopy-classification"
-status = "cv_post_segformer_mvp"
+status = "cv_post_segformer_and_ore_classifier_mvp"
 language = "ru"
 description = "Автоматическая классификация руды по микроскопическим изображениям полированных шлифов."
 
@@ -15,7 +15,7 @@ environment_file = "environment.yml"
 project_structure_known = false
 do_not_infer_structure = true
 known_package = "cv_analysis"
-implemented_files = ["cv_analysis/__init__.py", "cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml"]
+implemented_files = ["cv_analysis/__init__.py", "cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml", "cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "ore_classifier/__init__.py", "ore_classifier/config.py", "ore_classifier/utils.py", "ore_classifier/inspection.py", "ore_classifier/dataset.py", "ore_classifier/model.py", "ore_classifier/train.py", "ore_classifier/predict.py", "configs/classifier.yaml", "inspect_dataset.py", "train_classifier.py", "predict.py", "test/run_photometric_tests.py", "test/photometric_tests.yaml", "test/.gitignore", "test/outputs/.gitignore"]
 
 [environment]
 conda_env_name = "talk"
@@ -27,15 +27,17 @@ mps_available = false
 
 [environment.dependency_groups]
 cv = ["opencv-python-headless", "scikit-image", "pillow", "tifffile"]
-ml = ["pytorch", "torchvision", "scikit-learn"]
-segmentation = ["transformers", "segmentation-models-pytorch", "timm"]
-experiments = ["jupyterlab", "ipykernel", "pytest"]
+ml = ["pytorch=2.3.1=py3.11_cuda12.1_cudnn8_0", "torchvision=0.18.1=py311_cu121", "pytorch-mutex=1.0=cuda", "pytorch-cuda=12.1", "scikit-learn"]
+segmentation = ["transformers", "segmentation-models-pytorch", "timm", "git+https://github.com/ChaoningZhang/MobileSAM.git"]
+experiments = ["jupyterlab", "ipykernel", "pytest", "tensorboard"]
 
 [environment.notes]
 opencv_source = "pip opencv-python-headless; conda opencv was removed after libjxl/protobuf import conflicts"
 torchvision_io_warning = "torchvision imports, but torchvision.io image extension warns about missing libjpeg.9.dylib"
 image_io_preference = "Use cv2, Pillow, or tifffile unless torchvision.io is explicitly tested"
 transformers_upper_bound = "Use transformers>=4.44,<5 with current conda PyTorch 2.3.x; transformers 5.x disables PyTorch below 2.4."
+tensorboard_version = "tensorboard 2.20.0 installed in conda environment talk"
+cuda_target = "NVIDIA driver is available; environment uses PyTorch 2.3.1 CUDA 12.1 build py3.11_cuda12.1_cudnn8_0."
 
 [data]
 expected_labeled_images = 43
@@ -87,6 +89,55 @@ blackhat_persistence_policy = "Use raw blackhat_persistence in confidence_fusion
 hysteresis_seed_strategy = "Create seeds from confidence plus evidence, or from a single strong primary response when strong_response_threshold is set."
 component_shape_filter_policy = "Skip elongation and solidity checks for components smaller than shape_filter_min_area."
 final_filter_policy = "Soft final filtering: keep area bounds broad, disable confidence/persistence post-filtering by default, and allow small components after hysteresis."
+
+[photometric_test_harness]
+directory = "test"
+config = "test/photometric_tests.yaml"
+runner = "test/run_photometric_tests.py"
+output_dir = "test/outputs"
+output_policy = "Generated visual outputs are ignored by git; keep only test/outputs/.gitignore tracked."
+mask_source = "YOLO segmentation labels from data/labels are rasterized as SegFormer-like coarse masks for local tests."
+saved_images_per_case = ["01_original.png", "02_transformed.png", "03_segformer_overlay.png", "04_result_filtering.png", "05_triptych.png"]
+transform_groups = ["exposure_gain", "brightness_shift", "contrast", "gamma", "white_balance", "saturation", "hue_shift", "illumination_gradient", "vignette", "local_shadow", "local_highlight", "gaussian_noise", "poisson_noise", "gaussian_blur", "defocus_blur", "jpeg_compression", "quantization", "sharpening", "combinations"]
+
+[sulfide_candidates_module]
+module = "cv_analysis.sulfide_candidates"
+default_config = "cv_analysis/sulfide_candidates.yaml"
+public_function = "segment_sulfides(image, config, sam_refiner=None)"
+cli = "conda run -n talk python -m cv_analysis.sulfide_candidates --input data/img --output test/outputs/sulfide_candidates"
+model_free = "true for the baseline CV path; optional MobileSAM vit_t refinement is available only when sam.enabled and checkpoint/device are configured"
+sam_dependency = "optional MobileSAM boundary refinement through MobileSamRefiner; no AutomaticMaskGenerator, SAM2, negative points, batching, or training"
+mobile_sam_checkpoint = "data/models/mobile_sam/mobile_sam.pt"
+mobile_sam_preset = "tightened: box_padding=20, box_padding_ratio=0.15, max_positive_points=2, min_coverage=0.65, area_ratio range 0.50..3.00, prefer_larger_mask=false"
+outputs = ["cv_mask_uint8_0_255", "refined_mask_uint8_0_255"]
+implemented_stages = ["image_to_uint8_rgb", "lab_luminance", "gaussian_blur", "otsu_threshold_with_offset", "morphology", "small_component_removal", "optional_mobile_sam_component_refinement", "optional_overlay"]
+
+[ore_classifier_dataset]
+root = "data/dataset/dataset"
+top_level_directories = ["set1", "set2", "Панорамы"]
+binary_sources = ["set1", "set2"]
+excluded_sources_or_classes = ["Панорамы", "Оталькованные руды", "оталькованные"]
+source_class_counts = { "set1/difficult" = 68, "set1/ordinary" = 68, "set1/Оталькованные руды" = 84, "set2/difficult" = 418, "set2/ordinary" = 497, "set2/оталькованные" = 87, "Панорамы/Панорамы" = 14 }
+binary_task_counts = { "ordinary" = 565, "difficult" = 486 }
+notes = "Class folders define labels. Talc and panorama images are excluded from binary train/validation. Exact duplicate file hashes are assigned shared group IDs to avoid fold leakage."
+
+[ore_classifier_module]
+package = "ore_classifier"
+architecture_boundary = "Standalone supervised image-classification package; keep separate from cv_analysis classical CV modules."
+config = "configs/classifier.yaml"
+inspection_cli = "conda run -n talk python inspect_dataset.py --config configs/classifier.yaml"
+training_cli = "conda run -n talk python train_classifier.py --config configs/classifier.yaml"
+training_cli_with_experiment = "conda run -n talk python train_classifier.py --config configs/classifier.yaml --experiment-name convnext_last_stage_v1"
+prediction_cli = "conda run -n talk python predict.py --config configs/classifier.yaml --checkpoint path/to/best.ckpt --input path/to/image_or_directory"
+model = "shared timm backbone over one global view plus deterministic/random local crops; default backbone convnext_tiny"
+target_classes = ["ordinary", "difficult"]
+excluded_classes = ["talc", "panoramas", "unmapped_or_non_binary"]
+split_policy = "Default training uses a single group-aware stratified train/val split with val_fraction=0.3; all crops inherit the image split; exact SHA duplicates and matching dHash perceptual duplicate buckets share group_id. Cross-validation is available only with data.split_strategy=cross_val."
+ablation_controls = ["data.color_mode=rgb|grayscale", "data.num_local_crops=0 for global-only", "model.pooling=mean|gem", "model.finetune_mode=head_only|last_stage|last_two_stages|full_finetune", "model.backbone=convnext_tiny|resnet18", "data.include_sources=[set1]|[set2]|[set1,set2]"]
+saved_outputs = ["dataset_index.csv", "dataset_summary.json", "class_mapping.json", "config.yaml", "train_samples.csv", "val_samples.csv", "split_groups.json", "split_audit.json", "history.json", "best.ckpt", "best.pt", "predictions.csv", "metrics_summary.json", "ROC/PR plots", "TensorBoard event logs", "example image copies"]
+inference_latency_metrics = ["image_read_ms", "preprocess_views_ms", "transfer_to_device_ms", "model_forward_ms", "postprocess_ms", "total_inference_ms"]
+run_dir_policy = "If training.experiment_name is set, outputs go to data.output_dir/experiment_name/train_YYYYMMDD_HHMMSS by default; use --no-timestamp-subdir only when intentional overwrite/reuse is desired."
+default_split = "data.split_strategy=train_val, data.val_fraction=0.3; visible files train_samples.csv and val_samples.csv are saved at run root and inside train_val/. split_audit.json checks file_path, rel_path, group_id, sha256, and dhash overlap and stops training on leakage."
 
 [modeling_constraints]
 use_pretrained_models = true
@@ -144,3 +195,68 @@ files = ["cv.ipynb", "AGENTS.md", "project.toml"]
 date = "2026-07-04"
 summary = "Adjusted SegFormer post-processing: fusion now uses raw blackhat_persistence, hysteresis can seed from a single strong response, component shape filters are skipped for tiny components, and final filtering is soft."
 files = ["cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Added test/ photometric robustness harness with YAML-configured image transformations, SegFormer-mask overlays, filtered-result overlays, and generated output isolation under test/outputs."
+files = ["test/run_photometric_tests.py", "test/photometric_tests.yaml", "test/.gitignore", "test/outputs/.gitignore", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Implemented baseline CV module for sulfide candidate extraction with strict/loose masks, component metrics, SAM-compatible prompts, YAML config, and debug visualization CLI."
+files = ["cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "cv_analysis/__init__.py", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Simplified sulfide_candidates to a fast image-to-binary-mask API segment_sulfides, removing strict/loose masks, SAM prompts, boxes, and component metrics."
+files = ["cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "cv_analysis/__init__.py", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Changed sulfide segmentation to a single Lab L-channel Otsu threshold with configurable otsu_offset, removing the independent local contrast mask branch."
+files = ["cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Added optional MobileSAM vit_t component boundary refinement for sulfide CV masks with safe fallback to original CV components and CLI comparison outputs."
+files = ["cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "cv_analysis/__init__.py", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Made MobileSAM sulfide refinement more aggressive with relative box padding, multiple positive points, larger accepted area ratios, and no hard inside-box rejection."
+files = ["cv_analysis/sulfide_candidates.py", "cv_analysis/sulfide_candidates.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Tightened MobileSAM sulfide refinement settings after over-expansion: smaller relative padding, fewer positive points, higher coverage, lower max area ratio, and no larger-mask bonus."
+files = ["cv_analysis/sulfide_candidates.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Implemented an end-to-end binary ore classifier pipeline with dataset inspection, explicit class mapping, talc/panorama exclusion, duplicate-aware group IDs, multi-view timm model, grouped CV training, metrics reports, checkpoints, and inference CLI."
+files = ["ore_classifier", "configs/classifier.yaml", "inspect_dataset.py", "train_classifier.py", "predict.py", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Added TensorBoard training logs, tqdm progress bars, weights-only best.pt export, and inference support for both best.ckpt and best.pt classifier weights."
+files = ["ore_classifier/train.py", "ore_classifier/predict.py", "ore_classifier/config.py", "configs/classifier.yaml", "environment.yml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Added detailed classifier inference latency breakdown and CUDA-enabled PyTorch environment target with pytorch-cuda=12.1."
+files = ["ore_classifier/predict.py", "ore_classifier/config.py", "configs/classifier.yaml", "environment.yml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Added classifier experiment naming via training.experiment_name and --experiment-name, with timestamped run subdirectories under the configured output_dir."
+files = ["ore_classifier/train.py", "ore_classifier/config.py", "configs/classifier.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Changed classifier default from grouped cross-validation to a simple group-aware train/val split around 70/30, and save explicit train_samples.csv and val_samples.csv lists."
+files = ["ore_classifier/train.py", "ore_classifier/config.py", "configs/classifier.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Tightened classifier split leakage protection: dHash perceptual duplicates share group_id, and split_audit.json hard-checks file, group, sha256, and dHash overlap before training."
+files = ["ore_classifier/inspection.py", "ore_classifier/dataset.py", "ore_classifier/train.py", "ore_classifier/config.py", "configs/classifier.yaml", "AGENTS.md", "project.toml"]
