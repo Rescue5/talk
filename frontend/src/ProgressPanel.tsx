@@ -5,7 +5,8 @@ const STAGES = [
   ['upload', 'Загрузка'],
   ['talc_segmentation', 'Сегментация'],
   ['cv_refinement', 'CV-уточнение'],
-  ['sulfide', 'Классификация'],
+  ['sulfide_segmentation', 'Сульфиды'],
+  ['sulfide_classification', 'Классификация'],
   ['export', 'Экспорт'],
 ] as const;
 

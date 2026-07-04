@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   errorMessage,
+  sulfideStats,
   talcPercent as getTalcPercent,
   totalSeconds,
   type Job,
@@ -134,6 +135,7 @@ export function Workspace({
         classification: null,
         talc: null,
         sulfide: null,
+        sulfide_segmentation: null,
         artifacts: {},
       };
     });
@@ -158,6 +160,7 @@ export function Workspace({
     talc: true,
     sulfide: true,
     coarse: false,
+    sulfideMaskType: 'sam',
     talcOpacity: 0.88,
     sulfideOpacity: 0.62,
     coarseOpacity: 0.55,
@@ -208,7 +211,15 @@ export function Workspace({
   const className = classLabels[classCode] ?? item.classification?.label_ru ?? item.classification?.label ?? 'Не определён';
   const talcPercent = getTalcPercent(item);
   const sulfideProbability = Number(item.classification?.confidence ?? 0);
-  const hasSulfideMask = Boolean(item.artifacts.sulfide_mask);
+  const hasSulfideCv = Boolean(item.artifacts.sulfide_cv_overlay || item.artifacts.sulfide_mask);
+  const hasSulfideSam = Boolean(item.artifacts.sulfide_sam_overlay);
+  const hasSulfideMask = hasSulfideCv || hasSulfideSam;
+  const effectiveSulfideMaskType = overlays.sulfideMaskType === 'sam'
+    ? (hasSulfideSam ? 'sam' : 'cv')
+    : (hasSulfideCv ? 'cv' : hasSulfideSam ? 'sam' : 'cv');
+  const sulfideComposition = sulfideStats(item, effectiveSulfideMaskType);
+  const sulfidePercent = Number(sulfideComposition?.percent ?? 0);
+  const sulfideComponents = Number(sulfideComposition?.component_count ?? 0);
   const reprocessStage = item.status === 'running' || item.status === 'reprocessing'
     ? item.progress?.stage ?? ''
     : '';
@@ -340,7 +351,11 @@ export function Workspace({
               {errorMessage(item.error, 'Изображение не обработано')}
             </div>
           )}
-          <ImageViewer artifacts={item.artifacts} overlays={overlays} filename={item.filename} />
+          <ImageViewer
+            artifacts={item.artifacts}
+            overlays={{ ...overlays, sulfideMaskType: effectiveSulfideMaskType }}
+            filename={item.filename}
+          />
           <div className="summary-strip">
             <div><span>Тальк</span><strong>{talcPercent.toFixed(1)}%</strong></div>
             <div>
@@ -351,7 +366,7 @@ export function Workspace({
                   : `${itemSettings.talc_threshold_percent.toFixed(0)}%`}
               </strong>
             </div>
-            <div><span>Грубая область</span><strong>{Number(item.talc?.coarse_percent ?? 0).toFixed(1)}%</strong></div>
+            <div><span>Сульфиды · {sulfideComponents} зон</span><strong>{sulfidePercent.toFixed(1)}%</strong></div>
             <div><span>Общее время</span><strong>{totalSeconds(item).toFixed(1)} c</strong></div>
           </div>
         </section>
@@ -403,6 +418,24 @@ export function Workspace({
             {hasSulfideMask && (
               <>
                 <Toggle label="Сульфиды" checked={overlays.sulfide} onChange={(value) => updateOverlay('sulfide', value)} />
+                <div className="segmented-control" role="group" aria-label="Тип сульфидной маски">
+                  <button
+                    type="button"
+                    className={effectiveSulfideMaskType === 'cv' ? 'active' : ''}
+                    disabled={!hasSulfideCv}
+                    onClick={() => updateOverlay('sulfideMaskType', 'cv')}
+                  >
+                    CV
+                  </button>
+                  <button
+                    type="button"
+                    className={effectiveSulfideMaskType === 'sam' ? 'active' : ''}
+                    disabled={!hasSulfideSam}
+                    onClick={() => updateOverlay('sulfideMaskType', 'sam')}
+                  >
+                    SAM
+                  </button>
+                </div>
                 <Range label="Прозрачность" value={overlays.sulfideOpacity} min={0} max={1} step={0.05} suffix="" onChange={(value) => updateOverlay('sulfideOpacity', value)} />
               </>
             )}
@@ -454,7 +487,7 @@ export function Workspace({
 
           <section className="inspector-section charts">
             <ThresholdChart item={item} threshold={controls.talcThreshold} />
-            <CompositionChart item={item} />
+            <CompositionChart item={item} sulfideMaskType={effectiveSulfideMaskType} />
             <TimingChart item={item} />
           </section>
         </aside>

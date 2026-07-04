@@ -25,6 +25,8 @@ def save_semantic_overlays(
     output_dir: Path,
     segmentation_mask: np.ndarray,
     refined_talc_mask: np.ndarray,
+    sulfide_cv_mask: np.ndarray | None = None,
+    sulfide_sam_mask: np.ndarray | None = None,
 ) -> None:
     import cv2
 
@@ -43,6 +45,159 @@ def save_semantic_overlays(
         [255, 40, 40, 180], dtype=np.uint8
     )
     Image.fromarray(talc_rgba).save(output_dir / "talc_overlay.png")
+
+    if sulfide_cv_mask is not None:
+        _save_rgba_mask_layer(
+            output_dir / "sulfide_cv_overlay.png",
+            sulfide_cv_mask,
+            np.asarray([255, 178, 38, 175], dtype=np.uint8),
+        )
+    if sulfide_sam_mask is not None:
+        _save_rgba_mask_layer(
+            output_dir / "sulfide_sam_overlay.png",
+            sulfide_sam_mask,
+            np.asarray([36, 144, 255, 180], dtype=np.uint8),
+        )
+
+
+def _save_rgba_mask_layer(
+    path: Path, mask: np.ndarray, color_rgba: np.ndarray
+) -> None:
+    rgba = np.zeros((*mask.shape, 4), dtype=np.uint8)
+    rgba[mask.astype(bool)] = color_rgba
+    Image.fromarray(rgba).save(path)
+
+
+def _as_binary_uint8(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    array = np.asarray(mask)
+    if array.shape != shape:
+        raise ValueError("mask shape must match image height and width")
+    return (array.astype(np.uint8) > 0).astype(np.uint8) * 255
+
+
+def _exclude_talc(mask: np.ndarray, refined_talc_mask: np.ndarray) -> np.ndarray:
+    shape = refined_talc_mask.shape
+    mask_bool = _as_binary_uint8(mask, shape).astype(bool)
+    talc_bool = refined_talc_mask.astype(bool)
+    return ((mask_bool & ~talc_bool).astype(np.uint8) * 255).astype(np.uint8)
+
+
+def _sulfide_mask_summary(mask: np.ndarray) -> dict[str, Any]:
+    import cv2
+
+    binary = mask.astype(np.uint8) > 0
+    pixel_count = int(np.count_nonzero(binary))
+    total = int(binary.size)
+    component_count = 0
+    if pixel_count:
+        count, _, _, _ = cv2.connectedComponentsWithStats(
+            binary.astype(np.uint8),
+            connectivity=8,
+        )
+        component_count = int(count - 1)
+    return {
+        "pixel_count": pixel_count,
+        "fraction": pixel_count / total if total else 0.0,
+        "percent": pixel_count / total * 100.0 if total else 0.0,
+        "component_count": component_count,
+    }
+
+
+def _save_sulfide_artifacts(
+    output_dir: Path,
+    sulfide_cv_mask: np.ndarray,
+    sulfide_sam_mask: np.ndarray | None,
+) -> dict[str, str]:
+    Image.fromarray(sulfide_cv_mask).save(output_dir / "sulfide_cv_mask.png")
+    artifacts = {
+        "sulfide_cv_mask": "sulfide_cv_mask.png",
+        "sulfide_cv_overlay": "sulfide_cv_overlay.png",
+    }
+    if sulfide_sam_mask is not None:
+        Image.fromarray(sulfide_sam_mask).save(output_dir / "sulfide_sam_mask.png")
+        artifacts["sulfide_sam_mask"] = "sulfide_sam_mask.png"
+        artifacts["sulfide_sam_overlay"] = "sulfide_sam_overlay.png"
+    return artifacts
+
+
+def run_sulfide_segmentation(
+    image_rgb: np.ndarray,
+    refined_talc_mask: np.ndarray,
+    config: dict[str, Any],
+    segment_sulfides_fn: Callable[..., np.ndarray],
+    *,
+    sam_refiner: Any | None = None,
+    sam_error: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build CV/SAM sulfide masks and enforce talc mask precedence."""
+
+    started = perf_counter()
+    raw_cv_mask = segment_sulfides_fn(image_rgb, config)
+    cv_seconds = perf_counter() - started
+    sulfide_cv_mask = _exclude_talc(raw_cv_mask, refined_talc_mask)
+
+    sulfide_sam_mask = None
+    sam_seconds = 0.0
+    effective_sam_error = sam_error
+    sam_stats: dict[str, Any] = {}
+    sam_timings: dict[str, float] = {}
+    if sam_refiner is not None and np.any(sulfide_cv_mask):
+        sam_started = perf_counter()
+        try:
+            sam_cfg = config.get("sam", {})
+            raw_sam_mask = sam_refiner.refine(
+                image_rgb=image_rgb,
+                cv_mask=sulfide_cv_mask,
+                min_area=int(sam_cfg.get("min_area", 100)),
+                max_components=int(sam_cfg.get("max_components", 20)),
+                box_padding=int(sam_cfg.get("box_padding", 10)),
+                box_padding_ratio=float(sam_cfg.get("box_padding_ratio", 0.0)),
+                max_positive_points=int(sam_cfg.get("max_positive_points", 1)),
+                min_coverage=float(sam_cfg.get("min_coverage", 0.70)),
+                min_area_ratio=float(sam_cfg.get("min_area_ratio", 0.60)),
+                max_area_ratio=float(sam_cfg.get("max_area_ratio", 2.50)),
+                prefer_larger_mask=bool(sam_cfg.get("prefer_larger_mask", False)),
+            )
+            sulfide_sam_mask = _exclude_talc(raw_sam_mask, refined_talc_mask)
+            effective_sam_error = None
+            sam_stats = dict(getattr(sam_refiner, "last_stats", {}) or {})
+            sam_timings = {
+                key: float(value) / 1000.0
+                for key, value in (
+                    getattr(sam_refiner, "last_timings", {}) or {}
+                ).items()
+            }
+        except Exception as exc:
+            effective_sam_error = {
+                "code": "sam_refinement_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            }
+        sam_seconds = perf_counter() - sam_started
+
+    cv_summary = _sulfide_mask_summary(sulfide_cv_mask)
+    sam_summary = (
+        _sulfide_mask_summary(sulfide_sam_mask)
+        if sulfide_sam_mask is not None
+        else None
+    )
+    summary = {
+        "cv": cv_summary,
+        "sam": sam_summary,
+        "selected": "sam" if sam_summary is not None else "cv",
+        "sam_error": effective_sam_error,
+        "sam_stats": sam_stats,
+        "timings_seconds": {
+            "cv": cv_seconds,
+            "sam": sam_seconds,
+            **{f"sam_{key}": value for key, value in sam_timings.items()},
+            "total": cv_seconds + sam_seconds,
+        },
+    }
+    return {
+        "cv_mask": sulfide_cv_mask,
+        "sam_mask": sulfide_sam_mask,
+        "summary": summary,
+    }
 
 
 def cv_config_with_threshold(
@@ -198,6 +353,10 @@ class InferenceProcessor:
         self.config = config
         self._talc_analyzer: Any | None = None
         self._sulfide_classifier: SulfideClassifier | None = None
+        self._sulfide_segmentation_config: dict[str, Any] | None = None
+        self._sulfide_sam_refiner: Any | None = None
+        self._sulfide_sam_checked = False
+        self._sulfide_sam_error: dict[str, str] | None = None
         self._model_lock = threading.Lock()
 
     def _talc(self) -> Any:
@@ -217,6 +376,73 @@ class InferenceProcessor:
             if self._sulfide_classifier is None:
                 self._sulfide_classifier = SulfideClassifier(self.config)
             return self._sulfide_classifier
+
+    def _sulfide_segmentation_tools(
+        self,
+    ) -> tuple[dict[str, Any], Callable[..., np.ndarray]]:
+        _add_source_path(self.config.sulfide_source_path, "sulfide_segmentation")
+        from cv_analysis.sulfide_candidates import load_sulfide_config, segment_sulfides
+
+        with self._model_lock:
+            if self._sulfide_segmentation_config is None:
+                config_path = _require_file(
+                    self.config.sulfide_segmentation_config_path,
+                    "sulfide_segmentation_config",
+                )
+                loaded = load_sulfide_config(config_path)
+                loaded = deepcopy(loaded)
+                sam_cfg = loaded.setdefault("sam", {})
+                if self.config.sulfide_sam_checkpoint_path is not None:
+                    sam_cfg["checkpoint"] = str(
+                        self.config.sulfide_sam_checkpoint_path
+                    )
+                sam_cfg["device"] = self.config.sulfide_sam_device
+                self._sulfide_segmentation_config = loaded
+            return deepcopy(self._sulfide_segmentation_config), segment_sulfides
+
+    def _sulfide_sam(self) -> tuple[Any | None, dict[str, str] | None]:
+        with self._model_lock:
+            if self._sulfide_sam_checked:
+                return self._sulfide_sam_refiner, self._sulfide_sam_error
+            self._sulfide_sam_checked = True
+
+            checkpoint = self.config.sulfide_sam_checkpoint_path
+            if checkpoint is None:
+                self._sulfide_sam_error = {
+                    "code": "sam_checkpoint_not_configured",
+                    "message": "MobileSAM checkpoint is not configured; CV sulfide mask is used.",
+                }
+                return None, self._sulfide_sam_error
+            if not checkpoint.is_file():
+                self._sulfide_sam_error = {
+                    "code": "sam_checkpoint_not_found",
+                    "message": f"MobileSAM checkpoint not found: {checkpoint}",
+                }
+                return None, self._sulfide_sam_error
+
+            try:
+                _add_source_path(
+                    self.config.sulfide_source_path, "sulfide_segmentation"
+                )
+                from cv_analysis.sulfide_candidates import MobileSamRefiner
+
+                device = self.config.sulfide_sam_device
+                if device == "auto":
+                    import torch
+
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                self._sulfide_sam_refiner = MobileSamRefiner(
+                    checkpoint=checkpoint,
+                    device=device,
+                )
+                self._sulfide_sam_error = None
+            except Exception as exc:
+                self._sulfide_sam_error = {
+                    "code": "sam_unavailable",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+                self._sulfide_sam_refiner = None
+            return self._sulfide_sam_refiner, self._sulfide_sam_error
 
     def process(
         self,
@@ -368,6 +594,28 @@ class InferenceProcessor:
         if np.any(refined.mask.astype(bool) & ~segmentation.mask.astype(bool)):
             raise RuntimeError("CV refinement escaped the coarse segmentation mask")
 
+        progress("sulfide_segmentation", 0.58, "Segmenting sulfide inclusions")
+        sulfide_segmentation_config, segment_sulfides_fn = (
+            self._sulfide_segmentation_tools()
+        )
+        sam_refiner = None
+        sam_error = None
+        if bool(sulfide_segmentation_config.get("sam", {}).get("enabled", False)):
+            sam_refiner, sam_error = self._sulfide_sam()
+        started = perf_counter()
+        sulfide_segmentation_output = run_sulfide_segmentation(
+            image,
+            refined.mask,
+            sulfide_segmentation_config,
+            segment_sulfides_fn,
+            sam_refiner=sam_refiner,
+            sam_error=sam_error,
+        )
+        sulfide_segmentation_seconds = perf_counter() - started
+        sulfide_cv_mask = sulfide_segmentation_output["cv_mask"]
+        sulfide_sam_mask = sulfide_segmentation_output["sam_mask"]
+        sulfide_segmentation = sulfide_segmentation_output["summary"]
+
         started = perf_counter()
         coarse_statistics = _mask_statistics(segmentation.mask)
         refined_statistics = _mask_statistics(refined.mask)
@@ -411,6 +659,12 @@ class InferenceProcessor:
             "areas": {
                 "segmentation": coarse_statistics,
                 "refined_talc": refined_statistics,
+                "sulfide_cv": sulfide_segmentation["cv"],
+                **(
+                    {"sulfide_sam": sulfide_segmentation["sam"]}
+                    if sulfide_segmentation["sam"] is not None
+                    else {}
+                ),
             },
             "confidence": {
                 "segmentation": _confidence_summary(
@@ -424,8 +678,10 @@ class InferenceProcessor:
                 "image_load": load_seconds,
                 "segmentation": segmentation_seconds,
                 "cv_refinement": cv_seconds,
+                "sulfide_segmentation": sulfide_segmentation_seconds,
                 "statistics": statistics_seconds,
             },
+            "sulfide_segmentation": sulfide_segmentation,
         }
         talc_public = {
             **classification,
@@ -491,16 +747,27 @@ class InferenceProcessor:
         Image.fromarray(image).save(output_dir / "original.png")
         result.save(output_dir, overwrite=True)
         save_semantic_overlays(
-            output_dir, segmentation.mask, refined.mask
+            output_dir,
+            segmentation.mask,
+            refined.mask,
+            sulfide_cv_mask,
+            sulfide_sam_mask,
+        )
+        sulfide_artifacts = _save_sulfide_artifacts(
+            output_dir,
+            sulfide_cv_mask,
+            sulfide_sam_mask,
         )
         final_manifest = dict(result.statistics)
         final_manifest["demo"] = False
         final_manifest["sulfide"] = sulfide
         final_manifest["sulfide_error"] = sulfide_error
+        final_manifest["sulfide_segmentation"] = sulfide_segmentation
         final_manifest["ore_classification"] = final
         final_manifest.setdefault("artifacts", {})["original"] = "original.png"
         final_manifest["artifacts"]["coarse_overlay"] = "coarse_overlay.png"
         final_manifest["artifacts"]["talc_overlay"] = "talc_overlay.png"
+        final_manifest["artifacts"].update(sulfide_artifacts)
         if unavailable:
             final_manifest["error"] = unavailable
         final_manifest["timings_seconds"]["pipeline_total"] = (
@@ -523,6 +790,7 @@ class InferenceProcessor:
             "classification": final,
             "talc": talc_public,
             "sulfide": sulfide,
+            "sulfide_segmentation": sulfide_segmentation,
             "sulfide_error": sulfide_error,
             "timings": final_manifest["timings_seconds"],
             "error": unavailable,
@@ -535,6 +803,7 @@ class InferenceProcessor:
                 "overlay": "overlay.png",
                 "confidence_maps": "confidence_maps.npz",
                 "result": "result.json",
+                **sulfide_artifacts,
             },
         }
 
@@ -643,6 +912,7 @@ class InferenceProcessor:
             "classification": final,
             "talc": talc_public,
             "sulfide": sulfide,
+            "sulfide_segmentation": manifest.get("sulfide_segmentation"),
             "sulfide_error": manifest.get("sulfide_error"),
             "timings": manifest["timings_seconds"],
             "error": unavailable,
@@ -666,6 +936,42 @@ class InferenceProcessor:
         segmentation = gray < float(np.percentile(gray, 45))
         progress("cv_refinement", 0.45, "DEMO: refining illustrative mask")
         refined = segmentation & (image[:, :, 1] < image[:, :, 0])
+        progress(
+            "sulfide_segmentation",
+            0.58,
+            "DEMO: creating illustrative sulfide masks",
+        )
+        sulfide_started = perf_counter()
+        import cv2
+
+        sulfide_cv_bool = (gray > float(np.percentile(gray, 74))) & ~refined
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        sulfide_sam_bool = cv2.morphologyEx(
+            sulfide_cv_bool.astype(np.uint8),
+            cv2.MORPH_CLOSE,
+            kernel,
+        ).astype(bool) & ~refined
+        sulfide_cv_mask = (sulfide_cv_bool.astype(np.uint8) * 255).astype(np.uint8)
+        sulfide_sam_mask = (sulfide_sam_bool.astype(np.uint8) * 255).astype(np.uint8)
+        sulfide_cv_summary = _sulfide_mask_summary(sulfide_cv_mask)
+        sulfide_sam_summary = _sulfide_mask_summary(sulfide_sam_mask)
+        sulfide_total_seconds = perf_counter() - sulfide_started
+        sulfide_segmentation = {
+            "cv": sulfide_cv_summary,
+            "sam": sulfide_sam_summary,
+            "selected": "sam",
+            "sam_error": None,
+            "sam_stats": {
+                "components_considered": sulfide_cv_summary["component_count"],
+                "components_refined": sulfide_sam_summary["component_count"],
+                "components_fallback": 0,
+            },
+            "timings_seconds": {
+                "cv": 0.0,
+                "sam": sulfide_total_seconds,
+                "total": sulfide_total_seconds,
+            },
+        }
         talc_percent = float(refined.mean() * 100.0)
         talc = {
             "code": (
@@ -705,7 +1011,18 @@ class InferenceProcessor:
         overlay = image.copy()
         overlay[refined] = np.array([255, 40, 40], dtype=np.uint8)
         Image.fromarray(overlay).save(output_dir / "overlay.png")
-        save_semantic_overlays(output_dir, segmentation, refined)
+        save_semantic_overlays(
+            output_dir,
+            segmentation,
+            refined,
+            sulfide_cv_mask,
+            sulfide_sam_mask,
+        )
+        sulfide_artifacts = _save_sulfide_artifacts(
+            output_dir,
+            sulfide_cv_mask,
+            sulfide_sam_mask,
+        )
         np.savez_compressed(
             output_dir / "confidence_maps.npz",
             segmentation_confidence=segmentation.astype(np.float32),
@@ -713,7 +1030,10 @@ class InferenceProcessor:
             positive_votes=segmentation.astype(np.uint16),
             vote_count=np.ones(segmentation.shape, dtype=np.uint16),
         )
-        timings = {"pipeline_total": perf_counter() - started}
+        timings = {
+            "sulfide_segmentation": sulfide_total_seconds,
+            "pipeline_total": perf_counter() - started,
+        }
         manifest = {
             "schema_version": "1.1",
             "demo": True,
@@ -727,8 +1047,13 @@ class InferenceProcessor:
                     "sulfide_probability": settings.sulfide_threshold,
                 },
             },
+            "areas": {
+                "sulfide_cv": sulfide_segmentation["cv"],
+                "sulfide_sam": sulfide_segmentation["sam"],
+            },
             "classification": talc,
             "sulfide": sulfide,
+            "sulfide_segmentation": sulfide_segmentation,
             "ore_classification": final,
             "timings_seconds": timings,
             "artifacts": {
@@ -740,6 +1065,7 @@ class InferenceProcessor:
                 "overlay": "overlay.png",
                 "confidence_maps": "confidence_maps.npz",
                 "result": "result.json",
+                **sulfide_artifacts,
             },
         }
         with (output_dir / "result.json").open("w", encoding="utf-8") as stream:
@@ -752,6 +1078,7 @@ class InferenceProcessor:
             "classification": final,
             "talc": talc,
             "sulfide": sulfide,
+            "sulfide_segmentation": sulfide_segmentation,
             "timings": timings,
             "error": None,
             "artifacts": {
@@ -763,5 +1090,6 @@ class InferenceProcessor:
                 "overlay": "overlay.png",
                 "confidence_maps": "confidence_maps.npz",
                 "result": "result.json",
+                **sulfide_artifacts,
             },
         }

@@ -1,4 +1,4 @@
-import { talcPercent, totalSeconds, type ResultItem } from './types';
+import { sulfideStats, talcPercent, totalSeconds, type ResultItem, type SulfideMaskType } from './types';
 
 const valueOf = (value: unknown, fallback = 0) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -27,9 +27,16 @@ export function ThresholdChart({ item, threshold }: { item: ResultItem; threshol
   );
 }
 
-export function CompositionChart({ item }: { item: ResultItem }) {
+export function CompositionChart({
+  item,
+  sulfideMaskType = 'sam',
+}: {
+  item: ResultItem;
+  sulfideMaskType?: SulfideMaskType;
+}) {
   const talc = talcPercent(item);
-  const sulfide = valueOf(item.sulfide?.percent);
+  const sulfide = valueOf(sulfideStats(item, sulfideMaskType)?.percent);
+  const sulfideComponents = valueOf(sulfideStats(item, sulfideMaskType)?.component_count);
   const rest = Math.max(0, 100 - talc - sulfide);
   const segments = [
     { label: 'Тальк', value: talc, className: 'talc' },
@@ -64,6 +71,7 @@ export function CompositionChart({ item }: { item: ResultItem }) {
             <circle r="4" className={`composition-${segment.className}`} />
             <text x="9" y="4" className="chart-label">
               {segment.label} {segment.value.toFixed(1)}%
+              {segment.className === 'sulfide' && sulfideComponents ? ` · ${sulfideComponents}` : ''}
             </text>
           </g>
         ))}
@@ -81,7 +89,8 @@ export function TimingChart({ item }: { item: ResultItem }) {
     preprocessing: 'Подготовка',
     segmentation: 'Сегментация',
     cv_refinement: 'CV',
-    sulfide: 'Сульфиды',
+    sulfide_segmentation: 'Сульфиды',
+    sulfide: 'Класс',
   };
   return (
     <figure className="timing-chart">

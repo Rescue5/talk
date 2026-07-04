@@ -40,9 +40,11 @@ export async function health(signal?: AbortSignal): Promise<HealthState> {
     const payload = await response.json() as {
       status?: string;
       demo_mode?: boolean;
-      models?: Record<string, { status?: string }>;
+      models?: Record<string, { status?: string; required?: boolean }>;
     };
-    const modelsReady = Object.values(payload.models ?? {}).every((model) => model.status === 'configured');
+    const modelsReady = Object.values(payload.models ?? {}).every(
+      (model) => model.status === 'configured' || model.required === false,
+    );
     return {
       reachable: true,
       ready: modelsReady || payload.demo_mode === true,

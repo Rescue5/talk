@@ -87,6 +87,7 @@ class ResultItem(BaseModel):
     classification: dict | None
     talc: dict | None
     sulfide: dict | None
+    sulfide_segmentation: dict | None = None
     timings: dict[str, float] | None = None
     artifacts: dict[str, str]
     error: dict | None = None
@@ -115,6 +116,7 @@ class HistoryItem(BaseModel):
     classification: dict | None
     talc: dict | None
     sulfide: dict | None
+    sulfide_segmentation: dict | None = None
     artifacts: dict[str, str]
     settings: JobSettings
     created_at: str

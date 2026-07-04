@@ -85,6 +85,7 @@ def _result_items(job: dict[str, Any]) -> list[dict[str, Any]]:
         result.setdefault("classification", None)
         result.setdefault("talc", None)
         result.setdefault("sulfide", None)
+        result.setdefault("sulfide_segmentation", None)
         result.setdefault("timings", None)
         result.setdefault("artifacts", {})
         result.setdefault("error", None)
@@ -184,7 +185,11 @@ def create_app(
     def health(request: Request) -> dict[str, Any]:
         current: ServiceConfig = request.app.state.config
         models = current.model_status()
-        available = all(value["status"] == "configured" for value in models.values())
+        available = all(
+            value["status"] == "configured"
+            for value in models.values()
+            if value.get("required", True)
+        )
         return {
             "status": "ok" if available or current.demo_mode else "degraded",
             "service": "pytorchi-ore-analyzer",

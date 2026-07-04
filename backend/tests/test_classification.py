@@ -5,6 +5,7 @@ from app.processor import (
     InferenceProcessor,
     combine_classification,
     cv_config_with_threshold,
+    run_sulfide_segmentation,
     save_semantic_overlays,
 )
 from app.schemas import JobSettings
@@ -88,10 +89,16 @@ def test_semantic_overlays_are_independent_transparent_rgba(tmp_path) -> None:
     coarse[3:17, 3:17] = 1
     talc = np.zeros((20, 20), dtype=np.uint8)
     talc[8:12, 8:12] = 1
-    save_semantic_overlays(tmp_path, coarse, talc)
+    sulfide_cv = np.zeros((20, 20), dtype=np.uint8)
+    sulfide_cv[2:4, 2:4] = 255
+    sulfide_sam = np.zeros((20, 20), dtype=np.uint8)
+    sulfide_sam[14:17, 14:17] = 255
+    save_semantic_overlays(tmp_path, coarse, talc, sulfide_cv, sulfide_sam)
 
     coarse_rgba = np.asarray(Image.open(tmp_path / "coarse_overlay.png"))
     talc_rgba = np.asarray(Image.open(tmp_path / "talc_overlay.png"))
+    sulfide_cv_rgba = np.asarray(Image.open(tmp_path / "sulfide_cv_overlay.png"))
+    sulfide_sam_rgba = np.asarray(Image.open(tmp_path / "sulfide_sam_overlay.png"))
     assert coarse_rgba.shape == (20, 20, 4)
     assert talc_rgba.shape == (20, 20, 4)
     assert coarse_rgba[0, 0, 3] == 0
@@ -99,3 +106,71 @@ def test_semantic_overlays_are_independent_transparent_rgba(tmp_path) -> None:
     assert coarse_rgba[10, 10, 3] == 0
     assert talc_rgba[0, 0, 3] == 0
     assert talc_rgba[9, 9].tolist() == [255, 40, 40, 180]
+    assert sulfide_cv_rgba[2, 2].tolist() == [255, 178, 38, 175]
+    assert sulfide_sam_rgba[14, 14].tolist() == [36, 144, 255, 180]
+
+
+def test_sulfide_segmentation_excludes_talc_for_cv_and_sam() -> None:
+    image = np.zeros((12, 12, 3), dtype=np.uint8)
+    talc = np.zeros((12, 12), dtype=np.uint8)
+    talc[2:5, 2:5] = 1
+
+    def fake_segmenter(image_rgb, config):
+        mask = np.zeros(image_rgb.shape[:2], dtype=np.uint8)
+        mask[1:8, 1:8] = 255
+        return mask
+
+    class FakeRefiner:
+        last_stats = {
+            "components_considered": 1,
+            "components_refined": 1,
+            "components_fallback": 0,
+        }
+        last_timings = {
+            "set_image_ms": 1.0,
+            "prompts_ms": 2.0,
+            "total_refine_ms": 3.0,
+        }
+
+        def refine(self, image_rgb, cv_mask, **kwargs):
+            return np.full(cv_mask.shape, 255, dtype=np.uint8)
+
+    result = run_sulfide_segmentation(
+        image,
+        talc,
+        {"sam": {"enabled": True}},
+        fake_segmenter,
+        sam_refiner=FakeRefiner(),
+    )
+
+    talc_bool = talc.astype(bool)
+    assert not np.any(result["cv_mask"].astype(bool) & talc_bool)
+    assert not np.any(result["sam_mask"].astype(bool) & talc_bool)
+    assert result["summary"]["selected"] == "sam"
+    assert result["summary"]["sam"]["pixel_count"] == 12 * 12 - int(talc_bool.sum())
+
+
+def test_sulfide_segmentation_uses_cv_when_sam_is_missing() -> None:
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    talc = np.zeros((8, 8), dtype=np.uint8)
+
+    def fake_segmenter(image_rgb, config):
+        mask = np.zeros(image_rgb.shape[:2], dtype=np.uint8)
+        mask[1:4, 1:4] = 255
+        return mask
+
+    result = run_sulfide_segmentation(
+        image,
+        talc,
+        {"sam": {"enabled": True}},
+        fake_segmenter,
+        sam_error={
+            "code": "sam_checkpoint_not_configured",
+            "message": "MobileSAM checkpoint is not configured.",
+        },
+    )
+
+    assert result["sam_mask"] is None
+    assert result["summary"]["selected"] == "cv"
+    assert result["summary"]["sam_error"]["code"] == "sam_checkpoint_not_configured"
+    assert result["summary"]["cv"]["pixel_count"] == 9

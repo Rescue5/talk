@@ -280,6 +280,7 @@ class JobManager:
             "classification": None,
             "talc": None,
             "sulfide": None,
+            "sulfide_segmentation": None,
             "artifacts": {},
             "error": error,
         }

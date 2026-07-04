@@ -17,6 +17,12 @@ const talcOverlay = `data:image/svg+xml,${encodeURIComponent(`
 const coarseOverlay = `data:image/svg+xml,${encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900"><path d="M675 208c165-56 303 24 332 168 26 128-55 191-196 162-68-13-125-32-171-100-52-75-55-180 35-230zM475 482c135-59 280 9 319 132 33 102-38 186-142 173-145-18-244-82-220-201 9-45 12-82 43-104z" fill="#c95f3c" fill-opacity=".14" stroke="#d57a5b" stroke-width="6" stroke-dasharray="18 11"/></svg>`)}`
 
+const sulfideCvOverlay = `data:image/svg+xml,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900"><g fill="#ffb226" fill-opacity=".68"><path d="M801 232l92 51 38 98-62 88-114-17-54-109z"/><path d="M539 572l69-43 99 37 15 78-67 70-102-37z"/></g></svg>`)}`
+
+const sulfideSamOverlay = `data:image/svg+xml,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900"><g fill="#2490ff" fill-opacity=".58"><path d="M789 220l114 49 49 109-70 105-140-19-66-122z"/><path d="M525 559l83-49 116 42 21 93-78 88-128-42z"/></g></svg>`)}`
+
 export const demoResults: JobResults = {
   job_id: 'DEMO-0001',
   status: 'completed',
@@ -29,10 +35,17 @@ export const demoResults: JobResults = {
       classification: { code: 'ordinary', label: 'Рядовая', confidence: 0.91 },
       talc: { percent: 7.4, coarse_percent: 13.8, refined_percent: 7.4, confidence: 0.87 },
       sulfide: { probability_ordinary: 0.91, probability_difficult: 0.09, confidence: 0.91 },
+      sulfide_segmentation: {
+        cv: { percent: 11.3, pixel_count: 142000, component_count: 9 },
+        sam: { percent: 13.8, pixel_count: 173000, component_count: 7 },
+        selected: 'sam',
+        sam_error: null,
+      },
       timings: {
         preprocessing: 0.4,
         segmentation: 8.7,
         cv_refinement: 1.2,
+        sulfide_segmentation: 0.8,
         sulfide: 2.3,
         total: 12.9,
       },
@@ -40,6 +53,8 @@ export const demoResults: JobResults = {
         original: microscope,
         talc_mask: talcOverlay,
         coarse_mask: coarseOverlay,
+        sulfide_cv_overlay: sulfideCvOverlay,
+        sulfide_sam_overlay: sulfideSamOverlay,
         overlay: talcOverlay,
       },
     },
@@ -50,11 +65,19 @@ export const demoResults: JobResults = {
       classification: { code: 'talc_bearing', label: 'Оталькованная', confidence: null },
       talc: { percent: 12.6, coarse_percent: 18.2, refined_percent: 12.6, confidence: 0.84 },
       sulfide: null,
-      timings: { preprocessing: 0.5, segmentation: 9.4, cv_refinement: 1.4, sulfide: 2.1, total: 13.7 },
+      sulfide_segmentation: {
+        cv: { percent: 8.1, pixel_count: 99000, component_count: 5 },
+        sam: { percent: 9.4, pixel_count: 115000, component_count: 4 },
+        selected: 'sam',
+        sam_error: null,
+      },
+      timings: { preprocessing: 0.5, segmentation: 9.4, cv_refinement: 1.4, sulfide_segmentation: 0.7, sulfide: 2.1, total: 13.7 },
       artifacts: {
         original: microscope,
         talc_mask: talcOverlay,
         coarse_mask: coarseOverlay,
+        sulfide_cv_overlay: sulfideCvOverlay,
+        sulfide_sam_overlay: sulfideSamOverlay,
       },
     },
   ],

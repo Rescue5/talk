@@ -40,6 +40,23 @@ export type JobImage = {
 
 export type ApiError = string | { code?: string; message?: string; [key: string]: unknown } | null;
 
+export type SulfideMaskType = 'cv' | 'sam';
+
+export type SulfideMaskStats = {
+  pixel_count?: number;
+  percent?: number;
+  component_count?: number;
+  [key: string]: unknown;
+};
+
+export type SulfideSegmentation = {
+  cv?: SulfideMaskStats | null;
+  sam?: SulfideMaskStats | null;
+  selected?: SulfideMaskType;
+  sam_error?: ApiError;
+  [key: string]: unknown;
+};
+
 export type Job = {
   id: string;
   status: JobStatus;
@@ -57,6 +74,10 @@ export type ArtifactSet = {
   overlay?: string;
   talc_mask?: string;
   sulfide_mask?: string;
+  sulfide_cv_mask?: string;
+  sulfide_sam_mask?: string;
+  sulfide_cv_overlay?: string;
+  sulfide_sam_overlay?: string;
   coarse_mask?: string;
   segmentation_mask?: string;
   refined_talc_mask?: string;
@@ -81,6 +102,7 @@ export type TimingSet = {
   total?: number;
   segmentation?: number;
   cv_refinement?: number;
+  sulfide_segmentation?: number;
   sulfide?: number;
   preprocessing?: number;
   [key: string]: number | undefined;
@@ -101,6 +123,7 @@ export type ResultItem = {
     probability_ordinary?: number;
     probability_difficult?: number;
   }) | null;
+  sulfide_segmentation?: SulfideSegmentation | null;
   timings?: TimingSet;
   artifacts: ArtifactSet;
   error?: ApiError;
@@ -125,6 +148,7 @@ export type HistoryItem = {
   classification: ResultItem['classification'];
   talc: Metric | null;
   sulfide: ResultItem['sulfide'];
+  sulfide_segmentation?: SulfideSegmentation | null;
   artifacts: ArtifactSet;
   settings: JobSettings;
   created_at: string;
@@ -140,6 +164,16 @@ export function errorMessage(error: ApiError | undefined, fallback: string): str
 
 export function talcPercent(item: ResultItem): number {
   return Number(item.talc?.talc_percent ?? item.talc?.percent ?? 0);
+}
+
+export function sulfideStats(
+  item: ResultItem,
+  preferred: SulfideMaskType = 'sam',
+): SulfideMaskStats | null {
+  const segmentation = item.sulfide_segmentation;
+  if (!segmentation) return null;
+  const selected = segmentation.selected === 'sam' ? 'sam' : 'cv';
+  return segmentation[preferred] ?? segmentation[selected] ?? segmentation.cv ?? null;
 }
 
 export function totalSeconds(item: ResultItem): number {

@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MKL_NUM_THREADS=1
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y libgomp1 \
+    && apt-get install --no-install-recommends -y git libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/talk_app/backend

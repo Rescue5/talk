@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,13 @@ def config(tmp_path: Path, *, demo: bool = False) -> ServiceConfig:
         / "talk_sulfid"
         / "configs"
         / "classifier.yaml",
+        sulfide_segmentation_config_path=backend
+        / "vendor"
+        / "talk_sulfid"
+        / "cv_analysis"
+        / "sulfide_candidates.yaml",
+        sulfide_sam_checkpoint_path=None,
+        sulfide_sam_device="cpu",
         talc_source_path=backend / "vendor" / "talk_combined",
         sulfide_source_path=backend / "vendor" / "talk_sulfid",
         demo_mode=demo,
@@ -245,10 +253,30 @@ def test_explicit_demo_is_marked(tmp_path: Path) -> None:
         assert results["items"][0]["demo"] is True
         assert results["items"][0]["classification"]["source"] == "explicit_demo"
         assert client.get(results["items"][0]["artifacts"]["original"]).status_code == 200
-        for key in ("coarse_overlay", "talc_overlay"):
+        for key in (
+            "coarse_overlay",
+            "talc_overlay",
+            "sulfide_cv_overlay",
+            "sulfide_sam_overlay",
+            "sulfide_cv_mask",
+            "sulfide_sam_mask",
+        ):
             layer = client.get(results["items"][0]["artifacts"][key])
             assert layer.status_code == 200
             assert layer.headers["content-type"] == "image/png"
+        item = results["items"][0]
+        assert item["sulfide_segmentation"]["selected"] == "sam"
+        talc_mask = np.asarray(
+            Image.open(BytesIO(client.get(item["artifacts"]["refined_talc_mask"]).content))
+        ) > 0
+        cv_mask = np.asarray(
+            Image.open(BytesIO(client.get(item["artifacts"]["sulfide_cv_mask"]).content))
+        ) > 0
+        sam_mask = np.asarray(
+            Image.open(BytesIO(client.get(item["artifacts"]["sulfide_sam_mask"]).content))
+        ) > 0
+        assert not np.any(cv_mask & talc_mask)
+        assert not np.any(sam_mask & talc_mask)
         assert results["items"][0]["sulfide"] is not None
         image_id = results["items"][0]["image_id"]
         patched_settings = {

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Focus, Minus, Plus, RotateCcw } from 'lucide-react';
-import type { ArtifactSet } from './types';
+import type { ArtifactSet, SulfideMaskType } from './types';
 
 export type OverlayState = {
   talc: boolean;
   sulfide: boolean;
   coarse: boolean;
+  sulfideMaskType: SulfideMaskType;
   talcOpacity: number;
   sulfideOpacity: number;
   coarseOpacity: number;
@@ -47,6 +48,10 @@ export function ImageViewer({
     setPosition({ x: 0, y: 0 });
   };
   const original = artifacts.original;
+  const sulfideOverlay =
+    overlays.sulfideMaskType === 'sam' && artifacts.sulfide_sam_overlay
+      ? artifacts.sulfide_sam_overlay
+      : artifacts.sulfide_cv_overlay || artifacts.sulfide_mask;
 
   return (
     <section className="viewer-shell">
@@ -98,10 +103,10 @@ export function ImageViewer({
                 style={{ opacity: overlays.coarseOpacity }}
               />
             )}
-            {overlays.sulfide && artifacts.sulfide_mask && (
+            {overlays.sulfide && sulfideOverlay && (
               <img
                 className="overlay"
-                src={artifacts.sulfide_mask}
+                src={sulfideOverlay}
                 alt=""
                 draggable={false}
                 style={{ opacity: overlays.sulfideOpacity }}

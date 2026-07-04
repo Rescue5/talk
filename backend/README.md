@@ -2,7 +2,8 @@
 
 Local FastAPI service that runs talc segmentation/CV first, then invokes the
 ordinary/difficult sulfide classifier only when the refined talc percentage is
-less than or equal to the configured threshold.
+less than or equal to the configured threshold. The same processing pass also
+builds sulfide inclusion masks with CV and, when configured, MobileSAM.
 
 ## Run
 
@@ -13,6 +14,7 @@ python -m pip install torch==2.3.1 torchvision==0.18.1 \
 python -m pip install -r requirements.lock
 export TALC_CHECKPOINT_PATH=/models/talc-best.pt
 export SULFIDE_CHECKPOINT_PATH=/models/sulfide-best.pt
+export SULFIDE_SAM_CHECKPOINT_PATH=/models/mobile_sam.pt  # optional
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -32,6 +34,13 @@ Environment:
 - `TALC_CONFIG_PATH` — optional talc CV/runtime YAML.
 - `SULFIDE_CONFIG_PATH` — optional classifier YAML; defaults to the vendored
   config.
+- `SULFIDE_SEGMENTATION_CONFIG_PATH` — optional CV sulfide segmentation YAML;
+  defaults to the vendored config.
+- `SULFIDE_SAM_CHECKPOINT_PATH` — optional MobileSAM checkpoint for sulfide
+  mask refinement. If absent, the API still completes with CV-only sulfide
+  masks and records the SAM warning in `result.json`.
+- `SULFIDE_SAM_DEVICE=auto|cpu|cuda` — MobileSAM device; defaults to
+  `MODEL_DEVICE`.
 - `TALC_SOURCE_PATH`, `SULFIDE_SOURCE_PATH` — optional source overrides.
 - `MODEL_DEVICE=auto|cpu|cuda` — sulfide model device; defaults to `auto`.
 - `MAX_UPLOAD_BYTES` — maximum bytes per uploaded file; defaults to 100 MiB.
@@ -92,17 +101,21 @@ settings and progress, while the original job-level fields remain for older
 clients.
 
 Each completed image exposes `original`, `segmentation_mask`,
-`refined_talc_mask`, `coarse_overlay`, `talc_overlay`, `overlay`,
-`confidence_maps`, and `result` URLs in its `artifacts` object. `original` is
-normalized to browser-compatible PNG. `coarse_overlay` is a transparent RGBA
-layer with the coarse segmentation contour in yellow; `talc_overlay` is a
-transparent RGBA layer with refined talc pixels in red. They are intended for
-independent viewer toggles and opacity controls. `overlay` remains a combined
-preview. There is no sulfide mask: the current sulfide pipeline is an image
-classifier and returns only class probabilities.
+`refined_talc_mask`, `sulfide_cv_mask`, optional `sulfide_sam_mask`,
+`coarse_overlay`, `talc_overlay`, `sulfide_cv_overlay`, optional
+`sulfide_sam_overlay`, `overlay`, `confidence_maps`, and `result` URLs in its
+`artifacts` object. `original` is normalized to browser-compatible PNG.
+Overlay files are transparent RGBA layers intended for independent viewer
+toggles and opacity controls. `overlay` remains a combined talc preview.
+
+Sulfide masks never overlap refined talc pixels: the talc mask takes precedence
+and replaces sulfide candidates in the shared area. The ordinary/difficult
+classifier payload remains under `sulfide`; mask statistics live under
+`sulfide_segmentation`.
 
 Job progress stages are `upload`, `talc_segmentation`, `cv_refinement`,
-`sulfide_classification`, `export`, then `completed` (or an error status).
+`sulfide_segmentation`, `sulfide_classification`, `export`, then `completed`
+(or an error status).
 Inference jobs are serialized in a one-worker queue to keep model memory usage
 bounded.
 

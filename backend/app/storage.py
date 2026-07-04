@@ -232,6 +232,9 @@ class JobStore:
                             "classification": result.get("classification"),
                             "talc": result.get("talc"),
                             "sulfide": result.get("sulfide"),
+                            "sulfide_segmentation": result.get(
+                                "sulfide_segmentation"
+                            ),
                             "artifacts": result.get("artifacts", {}),
                             "settings": image["settings"],
                             "created_at": image["created_at"],
