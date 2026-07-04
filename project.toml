@@ -1,5 +1,5 @@
 schema_version = "0.1"
-updated_at = "2026-07-03"
+updated_at = "2026-07-04"
 
 [project]
 name = "ore-microscopy-classification"
@@ -35,11 +35,17 @@ experiments = ["jupyterlab", "ipykernel", "pytest"]
 opencv_source = "pip opencv-python-headless; conda opencv was removed after libjxl/protobuf import conflicts"
 torchvision_io_warning = "torchvision imports, but torchvision.io image extension warns about missing libjpeg.9.dylib"
 image_io_preference = "Use cv2, Pillow, or tifffile unless torchvision.io is explicitly tested"
+transformers_upper_bound = "Use transformers>=4.44,<5 with current conda PyTorch 2.3.x; transformers 5.x disables PyTorch below 2.4."
 
 [data]
 expected_labeled_images = 43
-raw_data_present = false
-annotation_granularity = "image-level classes plus coarse talc zones; no sulfide object-level masks confirmed"
+raw_data_present = true
+image_dir = "data/img"
+label_dir = "data/labels"
+classes_file = "data/classes.txt"
+current_labeled_images = 2
+annotation_format = "YOLO segmentation polygons: class_id followed by normalized x y polygon coordinates"
+annotation_granularity = "coarse talc-zone polygons for available images; no sulfide object-level masks confirmed"
 split_policy = "split by source sample before tile extraction"
 
 [pipeline_context]
@@ -67,10 +73,11 @@ module = "cv_analysis.post_segformer"
 default_config = "cv_analysis/post_segformer.yaml"
 public_class = "TalcCVPipeline"
 public_constructor = "TalcCVPipeline.from_yaml(path)"
-input = "RGB image array HxWx3; SegFormer output is not handled here"
-output = "uint8 binary mask HxW with values 0/1"
+public_call = "pipeline(image_rgb, segformer_mask)"
+input = "RGB image array HxWx3 plus SegFormer coarse talc-zone mask HxW; mask may be bool, integer 0/1, or float thresholded at >0.5"
+output = "uint8 binary talc-candidate mask HxW with values 0/1 constrained to the SegFormer search mask"
 implemented_processors = ["prepare_image", "local_darkness", "multiscale_blackhat", "normalize_features", "confidence_fusion", "hysteresis", "morphology_cleanup", "component_filter"]
-segformer_dependency = false
+segformer_dependency = "requires SegFormer output mask as input; does not run a SegFormer model"
 uses_dynamic_imports = false
 uses_torch_module = false
 smoke_check = "passed: synthetic round dark spot retained; elongated scratch rejected"
@@ -112,3 +119,18 @@ files = ["AGENTS.md", "project.toml"]
 date = "2026-07-03"
 summary = "Реализован модуль cv_analysis.post_segformer с последовательным YAML-настраиваемым CV pipeline для тёмных талькоподобных кандидатов."
 files = ["cv_analysis/__init__.py", "cv_analysis/post_segformer.py", "cv_analysis/post_segformer.yaml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "При создании окружения на Windows зафиксирована верхняя граница transformers<5, так как transformers 5.x требует PyTorch >=2.4 и отключает PyTorch при установленном conda PyTorch 2.3.1."
+files = ["environment.yml", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Интерфейс TalcCVPipeline изменён на pipeline(image_rgb, segformer_mask): CV post-processing теперь явно принимает исходное RGB-изображение и грубую маску зоны оталькования от SegFormer."
+files = ["cv_analysis/post_segformer.py", "AGENTS.md", "project.toml"]
+
+[[updates]]
+date = "2026-07-04"
+summary = "Структура данных обновлена: изображения находятся в data/img, соответствующие YOLO-segmentation txt-разметки грубой зоны оталькования находятся в data/labels; cv.ipynb собирает image_rgb и segformer_mask из этой структуры."
+files = ["cv.ipynb", "AGENTS.md", "project.toml"]

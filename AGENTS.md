@@ -10,7 +10,7 @@
 
 - Рабочая папка: `/Users/macbook/Documents/talk`.
 - На старте был только пустой файл `solution.py`.
-- Данные, разметка и обученные модели в репозитории пока не обнаружены.
+- В `data/img` лежат 2 исходных OM-изображения `.JPG`; в `data/labels` лежат соответствующие `.txt`-разметки полигонов грубой зоны оталькования в YOLO-segmentation формате. `data/classes.txt` содержит класс талька. Обученные модели в репозитории пока не обнаружены.
 - Созданное conda-окружение: `talk`.
 - Воспроизводимый spec окружения: `environment.yml`.
 - Машинно-читаемый проектный контекст и конфиг: `project.toml`.
@@ -60,10 +60,10 @@ SegFormer используется только как источник груб
 from cv_analysis.post_segformer import TalcCVPipeline
 
 pipeline = TalcCVPipeline.from_yaml("cv_analysis/post_segformer.yaml")
-mask = pipeline(image_rgb)
+mask = pipeline(image_rgb, segformer_mask)
 ```
 
-`image_rgb` должен быть массивом `H x W x 3`. Модуль не реализует SegFormer и не связан с конкретной моделью; вход трактуется как уже выбранная область поиска. Возвращаемая маска имеет форму `H x W` и dtype `uint8` со значениями `0/1`.
+`image_rgb` должен быть массивом `H x W x 3`. `segformer_mask` должен быть маской грубой зоны оталькования формы `H x W`, полученной от SegFormer; поддерживаются bool, целочисленные маски `0/1` и float-маски, где порог применяется как `> 0.5`. Модуль не реализует SegFormer и не связан с конкретной моделью; SegFormer используется только как источник области поиска. Возвращаемая маска имеет форму `H x W` и dtype `uint8` со значениями `0/1`.
 
 В `cv_analysis.post_segformer` реализованы последовательные обработчики: подготовка изображения, локальная темнота, multi-scale black-hat, robust-нормализация признаков, fusion confidence, hysteresis через connected components, консервативная морфологическая очистка и фильтрация компонент.
 
@@ -106,3 +106,4 @@ conda run -n talk python ...
 
 - `torch.backends.mps.is_available()` возвращает `False`, то есть текущий conda PyTorch работает без MPS-ускорения.
 - При импорте `torchvision` есть предупреждение о недоступной `torchvision.io` image extension из-за `libjpeg.9.dylib`. Базовые библиотеки чтения изображений (`cv2`, Pillow, tifffile) импортируются; не полагаться на `torchvision.io` без отдельной проверки.
+- Для текущего conda PyTorch 2.3.x зависимость `transformers` зафиксирована как `transformers>=4.44,<5`, потому что `transformers` 5.x требует PyTorch >=2.4 и отключает PyTorch-интеграцию при импорте.

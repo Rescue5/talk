@@ -59,6 +59,13 @@ class PrepareImage(CVProcessor):
             & (luminance > self.black_clip)
             & (luminance < self.white_clip)
         )
+        segformer_mask = _to_bool_mask(
+            _require_array(state, "segformer_mask"),
+            luminance.shape,
+        )
+        valid_mask &= segformer_mask
+        state.data["segformer_mask"] = segformer_mask
+
         if self.border_margin > 0:
             margin = self.border_margin
             valid_mask[:margin, :] = False
@@ -251,11 +258,27 @@ class ConfidenceFusion(CVProcessor):
         "local_log_darkness_norm",
         "local_zscore_norm",
         "blackhat_max_norm",
-        "blackhat_persistence_norm",
+        "blackhat_persistence",
     )
 
-    def __init__(self, weights: dict[str, float], vote_thresholds: dict[str, float]) -> None:
-        self.weights = _validated_feature_mapping(weights, self.FEATURE_KEYS, "weights")
+    PRIMARY_FEATURE_KEYS = (
+        "local_log_darkness_norm",
+        "local_zscore_norm",
+        "blackhat_max_norm",
+    )
+
+    def __init__(
+        self,
+        weights: dict[str, float],
+        vote_thresholds: dict[str, float],
+        max_weight: float = 0.65,
+        mean_weight: float = 0.35,
+    ) -> None:
+        self.weights = _validated_feature_mapping(
+            weights,
+            self.FEATURE_KEYS,
+            "weights",
+        )
         self.vote_thresholds = _validated_feature_mapping(
             vote_thresholds,
             self.FEATURE_KEYS,
@@ -264,24 +287,77 @@ class ConfidenceFusion(CVProcessor):
 
         weight_sum = sum(self.weights.values())
         if weight_sum <= 0:
-            raise ValueError("sum of weights must be positive")
-        self.weights = {key: value / weight_sum for key, value in self.weights.items()}
+            raise ValueError("sum of feature weights must be positive")
+
+        self.weights = {
+            key: value / weight_sum
+            for key, value in self.weights.items()
+        }
+
+        if max_weight < 0 or mean_weight < 0:
+            raise ValueError("max_weight and mean_weight must be non-negative")
+
+        fusion_weight_sum = max_weight + mean_weight
+        if fusion_weight_sum <= 0:
+            raise ValueError("sum of fusion weights must be positive")
+
+        self.max_weight = max_weight / fusion_weight_sum
+        self.mean_weight = mean_weight / fusion_weight_sum
 
     def process(self, state: ProcessingState) -> ProcessingState:
         valid_mask = _require_bool_array(state, "valid_mask")
         shape = valid_mask.shape
-        confidence = np.zeros(shape, dtype=np.float32)
+
+        weighted_mean = np.zeros(shape, dtype=np.float32)
         evidence_count = np.zeros(shape, dtype=np.uint8)
 
-        for feature_name in self.FEATURE_KEYS:
-            feature = _require_array(state, feature_name)
-            confidence += np.float32(self.weights[feature_name]) * feature
-            evidence_count += (feature >= self.vote_thresholds[feature_name]).astype(np.uint8)
+        features: dict[str, np.ndarray] = {}
 
-        confidence[~valid_mask] = 0
+        for feature_name in self.FEATURE_KEYS:
+            feature = _require_array(state, feature_name).astype(
+                np.float32,
+                copy=False,
+            )
+
+            if feature.shape != shape:
+                raise ValueError(
+                    f"Feature '{feature_name}' has shape {feature.shape}, "
+                    f"expected {shape}"
+                )
+
+            features[feature_name] = feature
+
+            weighted_mean += (
+                np.float32(self.weights[feature_name]) * feature
+            )
+
+            evidence_count += (
+                feature >= self.vote_thresholds[feature_name]
+            ).astype(np.uint8)
+
+        strongest_response = np.maximum.reduce(
+            [
+                features[feature_name]
+                for feature_name in self.PRIMARY_FEATURE_KEYS
+            ]
+        )
+
+        confidence = (
+            np.float32(self.max_weight) * strongest_response
+            + np.float32(self.mean_weight) * weighted_mean
+        )
+
+        confidence = np.clip(confidence, 0.0, 1.0)
+
+        confidence[~valid_mask] = 0.0
+        strongest_response[~valid_mask] = 0.0
         evidence_count[~valid_mask] = 0
+
+        state.data["weighted_mean_confidence"] = weighted_mean
+        state.data["strongest_response"] = strongest_response
         state.data["confidence"] = confidence
         state.data["evidence_count"] = evidence_count
+
         return state
 
 
@@ -294,13 +370,26 @@ class HysteresisSegmentation(CVProcessor):
         grow_min_evidence: int,
         min_seed_area: int,
         connectivity: int,
+        strong_response_threshold: float | None = None,
     ) -> None:
         if not grow_threshold < seed_threshold:
-            raise ValueError("grow_threshold must be lower than seed_threshold")
+            raise ValueError(
+                "grow_threshold must be lower than seed_threshold"
+            )
         if grow_min_evidence > seed_min_evidence:
-            raise ValueError("grow_min_evidence must be <= seed_min_evidence")
+            raise ValueError(
+                "grow_min_evidence must be <= seed_min_evidence"
+            )
         if min_seed_area < 1:
             raise ValueError("min_seed_area must be positive")
+        if (
+            strong_response_threshold is not None
+            and not 0.0 <= strong_response_threshold <= 1.0
+        ):
+            raise ValueError(
+                "strong_response_threshold must be in [0, 1]"
+            )
+
         _validate_connectivity(connectivity)
 
         self.seed_threshold = float(seed_threshold)
@@ -309,8 +398,12 @@ class HysteresisSegmentation(CVProcessor):
         self.grow_min_evidence = int(grow_min_evidence)
         self.min_seed_area = int(min_seed_area)
         self.connectivity = int(connectivity)
+        self.strong_response_threshold = strong_response_threshold
 
-    def process(self, state: ProcessingState) -> ProcessingState:
+    def process(
+        self,
+        state: ProcessingState,
+    ) -> ProcessingState:
         confidence = _require_array(state, "confidence")
         evidence_count = _require_array(state, "evidence_count")
         valid_mask = _require_bool_array(state, "valid_mask")
@@ -318,9 +411,25 @@ class HysteresisSegmentation(CVProcessor):
         seed_mask = (
             (confidence >= self.seed_threshold)
             & (evidence_count >= self.seed_min_evidence)
-            & valid_mask
         )
-        seed_mask = _remove_small_components(seed_mask, self.min_seed_area, self.connectivity)
+
+        if self.strong_response_threshold is not None:
+            strongest_response = _require_array(
+                state,
+                "strongest_response",
+            )
+            seed_mask |= (
+                strongest_response
+                >= self.strong_response_threshold
+            )
+
+        seed_mask &= valid_mask
+
+        seed_mask = _remove_small_components(
+            seed_mask,
+            self.min_seed_area,
+            self.connectivity,
+        )
 
         grow_mask = (
             (confidence >= self.grow_threshold)
@@ -329,21 +438,28 @@ class HysteresisSegmentation(CVProcessor):
         )
 
         if not np.any(seed_mask):
-            candidate_mask = np.zeros(valid_mask.shape, dtype=bool)
+            candidate_mask = np.zeros(
+                valid_mask.shape,
+                dtype=bool,
+            )
         else:
             num_labels, labels = cv2.connectedComponents(
                 grow_mask.astype(np.uint8),
                 connectivity=self.connectivity,
             )
+
             accepted_labels = np.unique(labels[seed_mask])
-            accepted_labels = accepted_labels[accepted_labels != 0]
+            accepted_labels = accepted_labels[
+                accepted_labels != 0
+            ]
+
             lookup = np.zeros(num_labels, dtype=bool)
             lookup[accepted_labels] = True
             candidate_mask = lookup[labels]
 
         state.data["seed_mask"] = seed_mask
+        state.data["grow_mask"] = grow_mask
         state.data["candidate_mask"] = candidate_mask
-        state.metadata["connectivity"] = self.connectivity
         return state
 
 
@@ -402,6 +518,7 @@ class ComponentFilter(CVProcessor):
         reject_border_touching: bool,
         connectivity: int,
         eps: float,
+        shape_filter_min_area: int,
     ) -> None:
         if min_area < 1:
             raise ValueError("min_area must be positive")
@@ -420,7 +537,12 @@ class ComponentFilter(CVProcessor):
         _validate_connectivity(connectivity)
         if eps <= 0:
             raise ValueError("eps must be positive")
+        if shape_filter_min_area < 1:
+            raise ValueError(
+                "shape_filter_min_area must be positive"
+            )
 
+        self.shape_filter_min_area = int(shape_filter_min_area)
         self.min_area = int(min_area)
         self.max_area = int(max_area)
         self.max_elongation = float(max_elongation)
@@ -596,10 +718,25 @@ class ComponentFilter(CVProcessor):
     def _passes_area(self, metrics: dict[str, Any]) -> bool:
         return self.min_area <= metrics["area"] <= self.max_area
 
-    def _passes_elongation(self, metrics: dict[str, Any]) -> bool:
-        return metrics["elongation"] <= self.max_elongation
+    def _passes_elongation(
+        self,
+        metrics: dict[str, Any],
+    ) -> bool:
+        if metrics["area"] < self.shape_filter_min_area:
+            return True
 
-    def _passes_solidity(self, metrics: dict[str, Any]) -> bool:
+        return (
+            metrics["elongation"]
+            <= self.max_elongation
+        )
+    
+    def _passes_solidity(
+        self,
+        metrics: dict[str, Any],
+    ) -> bool:
+        if metrics["area"] < self.shape_filter_min_area:
+            return True
+
         return metrics["solidity"] >= self.min_solidity
 
     def _passes_ring_contrast(self, metrics: dict[str, Any]) -> bool:
@@ -664,8 +801,13 @@ class TalcCVPipeline:
 
         return cls(processors)
 
-    def __call__(self, image_rgb: np.ndarray) -> np.ndarray:
-        state = ProcessingState(image_rgb=image_rgb, data={}, metadata={})
+    def __call__(
+        self,
+        image_rgb: np.ndarray,
+        segformer_mask: np.ndarray,
+    ) -> np.ndarray:
+        data = {"segformer_mask": np.asarray(segformer_mask)}
+        state = ProcessingState(image_rgb=image_rgb, data=data, metadata={})
         for processor in self.processors:
             state = processor(state)
         if "final_mask" not in state.data:
@@ -704,6 +846,25 @@ def _to_float_rgb(image: np.ndarray, input_color: str) -> tuple[np.ndarray, np.n
     if input_color == "bgr":
         image_float = image_float[..., ::-1].copy()
     return image_float, finite_mask
+
+
+def _to_bool_mask(mask: np.ndarray, expected_shape: tuple[int, int]) -> np.ndarray:
+    array = np.asarray(mask)
+    if array.ndim == 3 and array.shape[2] == 1:
+        array = array[..., 0]
+    if array.shape != expected_shape:
+        raise ValueError(
+            "segformer_mask must have shape HxW matching image_rgb; "
+            f"got {array.shape}, expected {expected_shape}"
+        )
+
+    if array.dtype == bool:
+        return array.copy()
+    if np.issubdtype(array.dtype, np.floating):
+        return (np.isfinite(array) & (array > 0.5)).astype(bool, copy=False)
+    if np.issubdtype(array.dtype, np.integer):
+        return array != 0
+    raise TypeError("segformer_mask dtype must be bool, integer, or floating")
 
 
 def _robust_normalize(

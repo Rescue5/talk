@@ -33,7 +33,6 @@ pipeline:
         - local_log_darkness
         - local_zscore
         - blackhat_max
-        - blackhat_persistence
       lower_percentile: 2.0
       upper_percentile: 99.0
       min_dynamic_range: 1.0e-6
@@ -43,17 +42,20 @@ pipeline:
   - type: confidence_fusion
     enabled: true
     params:
-      weights:
-        local_log_darkness_norm: 0.35
-        local_zscore_norm: 0.25
-        blackhat_max_norm: 0.30
-        blackhat_persistence_norm: 0.10
+      max_weight: 0.65
+      mean_weight: 0.35
 
-      vote_thresholds:
-        local_log_darkness_norm: 0.60
-        local_zscore_norm: 0.55
-        blackhat_max_norm: 0.60
-        blackhat_persistence_norm: 0.40
+    weights:
+      local_log_darkness_norm: 0.35
+      local_zscore_norm: 0.20
+      blackhat_max_norm: 0.35
+      blackhat_persistence: 0.10
+
+    vote_thresholds:
+      local_log_darkness_norm: 0.40
+      local_zscore_norm: 0.35
+      blackhat_max_norm: 0.40
+      blackhat_persistence: 0.25
 
   - type: hysteresis
     enabled: true
@@ -89,16 +91,21 @@ pipeline:
   - type: component_filter
     enabled: true
     params:
-      min_area: 5
-      max_area: 5000
-      max_elongation: 8.0
-      min_solidity: 0.20
+      min_area: 1
+      max_area: 30000
+
+      shape_filter_min_area: 20
+      max_elongation: 15.0
+      min_solidity: 0.05
+
       ring_radius: 5
-      min_ring_pixels: 10
+      min_ring_pixels: 6
       insufficient_ring_policy: skip_filter
-      min_ring_contrast: 0.03
-      min_median_confidence: 0.50
-      min_persistence: 0.20
+      min_ring_contrast: 0.0
+
+      min_median_confidence: 0.0
+      min_persistence: 0.0
+
       reject_border_touching: false
       connectivity: 8
       eps: 1.0e-6
