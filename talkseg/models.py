@@ -39,7 +39,7 @@ def _build_deeplabv3(config: ModelConfig, output_channels: int) -> nn.Module:
 def _build_segformer(config: ModelConfig, output_channels: int) -> nn.Module:
     import segmentation_models_pytorch as smp
 
-    return smp.Segformer(
+    model = smp.Segformer(
         encoder_name=config.encoder_name,
         encoder_depth=config.encoder_depth,
         encoder_weights=config.encoder_weights,
@@ -48,6 +48,16 @@ def _build_segformer(config: ModelConfig, output_channels: int) -> nn.Module:
         classes=output_channels,
         activation=None,
     )
+    # SMP uses BatchNorm in the otherwise MLP-based decoder. Its backward pass
+    # fails for this decoder layout on Apple MPS, and batch statistics are also
+    # unstable for the small batches used by this project. Encoder weights are
+    # unaffected because only the randomly initialized decoder norm is replaced.
+    decoder_channels = config.decoder_channels
+    groups = min(32, decoder_channels)
+    while decoder_channels % groups:
+        groups -= 1
+    model.decoder.fuse_stage[1] = nn.GroupNorm(groups, decoder_channels)
+    return model
 
 
 def available_models() -> tuple[str, ...]:

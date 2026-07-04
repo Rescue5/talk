@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -22,6 +23,7 @@ from .data import (
     select_samples,
 )
 from .models import build_model, set_encoder_trainable
+from .visualization import plot_history, save_validation_grid
 
 
 def choose_device() -> torch.device:
@@ -40,33 +42,61 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+class SoftDiceLoss(nn.Module):
+    """Dice loss without ``view`` calls that fail on strided MPS tensors."""
+
+    def __init__(self, task: str, epsilon: float = 1e-7) -> None:
+        super().__init__()
+        self.task = task
+        self.epsilon = epsilon
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        logits = logits.contiguous()
+        if self.task == "binary":
+            probabilities = logits.sigmoid()
+            encoded_target = target.unsqueeze(1).to(logits.dtype).contiguous()
+        else:
+            probabilities = logits.softmax(dim=1)
+            encoded_target = (
+                F.one_hot(target.long(), num_classes=logits.shape[1])
+                .permute(0, 3, 1, 2)
+                .to(logits.dtype)
+                .contiguous()
+            )
+
+        dimensions = (0, 2, 3)
+        intersection = (probabilities * encoded_target).sum(dim=dimensions)
+        cardinality = (probabilities + encoded_target).sum(dim=dimensions)
+        score = (2.0 * intersection) / cardinality.clamp_min(self.epsilon)
+        loss = 1.0 - score
+        present_classes = encoded_target.sum(dim=dimensions) > 0
+        if present_classes.any():
+            return loss[present_classes].mean()
+        return logits.sum() * 0.0
+
+
 class CompositeSegmentationLoss(nn.Module):
     def __init__(self, task: str, bce_weight: float, dice_weight: float) -> None:
         super().__init__()
-        import segmentation_models_pytorch as smp
-
         self.task = task
         self.primary_weight = bce_weight
         self.dice_weight = dice_weight
         if task == "binary":
             self.primary = nn.BCEWithLogitsLoss()
-            self.dice = smp.losses.DiceLoss(
-                mode=smp.losses.BINARY_MODE, from_logits=True
-            )
         else:
             self.primary = nn.CrossEntropyLoss()
-            self.dice = smp.losses.DiceLoss(
-                mode=smp.losses.MULTICLASS_MODE, from_logits=True
-            )
+        self.dice = SoftDiceLoss(task)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        logits = logits.contiguous()
+        target = target.contiguous()
         if self.task == "binary":
-            target_for_loss = target.unsqueeze(1).float()
+            target_for_loss = target.unsqueeze(1).to(logits.dtype).contiguous()
         else:
             target_for_loss = target
         return self.primary_weight * self.primary(
             logits, target_for_loss
-        ) + self.dice_weight * self.dice(logits, target_for_loss)
+        ) + self.dice_weight * self.dice(logits, target)
 
 
 class SegmentationStats:
@@ -127,17 +157,17 @@ def _run_epoch(
     stats = SegmentationStats(task, threshold)
     total_loss = 0.0
     total_items = 0
-    progress = tqdm(loader, leave=False, desc="train" if training else "val")
+    progress = tqdm(loader, leave=False, desc="train" if training else "val", ncols=100)
     for batch in progress:
-        images = batch["image"].to(device, non_blocking=True)
-        targets = batch["mask"].to(device, non_blocking=True)
+        images = batch["image"].to(device, non_blocking=True).contiguous()
+        targets = batch["mask"].to(device, non_blocking=True).contiguous()
         if training:
             optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
             with torch.autocast(
                 device_type=device.type, enabled=use_amp, dtype=torch.float16
             ):
-                logits = model(images)
+                logits = model(images).contiguous()
                 loss = criterion(logits.float(), targets)
             if training:
                 scaler.scale(loss).backward()
@@ -357,4 +387,22 @@ def train(
             epoch,
             best_iou,
         )
+        visualization_frequency = config.train.visualize_every_n_epochs
+        if visualization_frequency and epoch % visualization_frequency == 0:
+            visualization_path = (
+                run_dir / "visualizations" / f"epoch_{epoch:03d}.png"
+            )
+            save_validation_grid(
+                model,
+                val_loader,
+                config,
+                device,
+                epoch,
+                visualization_path,
+            )
+            print(f"visualization: {visualization_path}")
+
+    history_plot_path = run_dir / "history.png"
+    plot_history(run_dir / "history.csv", history_plot_path)
+    print(f"history plot: {history_plot_path}")
     return best_path

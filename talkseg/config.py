@@ -43,6 +43,7 @@ class TrainConfig:
     threshold: float = 0.5
     bce_weight: float = 0.5
     dice_weight: float = 0.5
+    visualize_every_n_epochs: int = 5
 
 
 @dataclass
@@ -81,6 +82,8 @@ class ExperimentConfig:
             raise ValueError("repeat_factor must be >= 1")
         if self.train.epochs < 1 or self.train.batch_size < 1:
             raise ValueError("epochs and batch_size must be >= 1")
+        if self.train.visualize_every_n_epochs < 0:
+            raise ValueError("visualize_every_n_epochs must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
         return _paths_to_strings(asdict(self))
