@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
@@ -346,11 +347,19 @@ export function Workspace({
               </button>
             </div>
           </div>
-          {item.error && (
-            <div className="result-error" role="alert">
-              {errorMessage(item.error, 'Изображение не обработано')}
-            </div>
-          )}
+          <div className="visual-alerts">
+            {item.error && (
+              <div className="result-error" role="alert">
+                {errorMessage(item.error, 'Изображение не обработано')}
+              </div>
+            )}
+            {item.warnings?.map((warning) => (
+              <div className="quality-warning" role="status" key={warning.code}>
+                <AlertTriangle size={16} />
+                <span>{warning.message}</span>
+              </div>
+            ))}
+          </div>
           <ImageViewer
             artifacts={item.artifacts}
             overlays={{ ...overlays, sulfideMaskType: effectiveSulfideMaskType }}

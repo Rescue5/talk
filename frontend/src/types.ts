@@ -40,6 +40,19 @@ export type JobImage = {
 
 export type ApiError = string | { code?: string; message?: string; [key: string]: unknown } | null;
 
+export type AnalysisWarning = {
+  code: string;
+  severity?: 'warning' | 'info';
+  message: string;
+};
+
+export type CacheInfo = {
+  max_images: number;
+  stored_images: number;
+  active_images: number;
+  size_bytes: number;
+};
+
 export type SulfideMaskType = 'cv' | 'sam';
 
 export type SulfideMaskStats = {
@@ -129,6 +142,7 @@ export type ResultItem = {
   error?: ApiError;
   settings?: JobSettings;
   progress?: ImageProgress;
+  warnings?: AnalysisWarning[];
 };
 
 export type JobResults = {
@@ -154,6 +168,7 @@ export type HistoryItem = {
   created_at: string;
   updated_at: string;
   error?: ApiError;
+  warnings?: AnalysisWarning[];
 };
 
 export function errorMessage(error: ApiError | undefined, fallback: string): string {

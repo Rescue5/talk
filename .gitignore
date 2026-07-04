@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 data/
 jobs/
 outputs/
@@ -16,4 +17,3 @@ checkpoints/
 *.pth
 *.ckpt
 *.onnx
-

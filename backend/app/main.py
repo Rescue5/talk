@@ -25,6 +25,8 @@ from .config import ServiceConfig
 from .jobs import JobManager, Processor
 from .processor import InferenceProcessor
 from .schemas import (
+    CacheInfo,
+    CacheSettingsPatch,
     ImageHistory,
     JobHistory,
     JobPublic,
@@ -89,6 +91,7 @@ def _result_items(job: dict[str, Any]) -> list[dict[str, Any]]:
         result.setdefault("timings", None)
         result.setdefault("artifacts", {})
         result.setdefault("error", None)
+        result.setdefault("warnings", [])
         items.append(result)
     return items
 
@@ -178,7 +181,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(service_config.allowed_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -249,6 +252,23 @@ def create_app(
     @application.get("/api/history", response_model=ImageHistory)
     def image_history(request: Request, limit: int = 50) -> dict[str, Any]:
         return {"items": request.app.state.store.history(limit)}
+
+    @application.get("/api/cache", response_model=CacheInfo)
+    def cache_info(request: Request) -> dict[str, int]:
+        return request.app.state.store.cache_info()
+
+    @application.patch("/api/cache", response_model=CacheInfo)
+    def update_cache(
+        request: Request,
+        payload: CacheSettingsPatch = Body(...),
+    ) -> dict[str, int]:
+        request.app.state.store.set_max_history(payload.max_images)
+        return request.app.state.store.cache_info()
+
+    @application.delete("/api/cache", response_model=CacheInfo)
+    def clear_cache(request: Request) -> dict[str, int]:
+        request.app.state.store.clear_history()
+        return request.app.state.store.cache_info()
 
     @application.post(
         "/api/jobs/{job_id}/images",

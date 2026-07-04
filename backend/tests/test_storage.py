@@ -89,3 +89,22 @@ def test_v1_manifest_is_migrated_to_per_image_state(tmp_path: Path) -> None:
     assert migrated["images"][0]["settings"]["mode"] == "overlap"
     persisted = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert persisted["images"][0]["image_id"] == "image-1"
+
+
+def test_cache_limit_persists_and_clear_removes_terminal_images(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path, max_history=50)
+    settings = JobSettings().model_dump()
+    store.create("job", settings, [input_record(1)], demo=False)
+    complete(store, "job", 1)
+
+    store.set_max_history(25)
+    assert JobStore(tmp_path, max_history=50).cache_info()["max_images"] == 25
+
+    store.clear_history()
+    info = store.cache_info()
+    assert info["stored_images"] == 0
+    assert info["max_images"] == 25
+    with pytest.raises(JobNotFound):
+        store.get("job")

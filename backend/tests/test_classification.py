@@ -3,6 +3,7 @@ from PIL import Image
 
 from app.processor import (
     InferenceProcessor,
+    assess_image_quality,
     combine_classification,
     cv_config_with_threshold,
     run_sulfide_segmentation,
@@ -58,6 +59,18 @@ def test_threshold_defaults_match_api_contract() -> None:
     settings = JobSettings()
     assert settings.segmentation_threshold == 0.5
     assert settings.cv_threshold == 0.55
+
+
+def test_underexposed_image_gets_stability_warning() -> None:
+    image = np.full((64, 64, 3), 25, dtype=np.uint8)
+    quality = assess_image_quality(image)
+    assert quality["dark_pixel_fraction"] == 1.0
+    assert quality["warnings"][0]["code"] == "underexposed_image"
+
+
+def test_normally_exposed_image_has_no_warning() -> None:
+    image = np.full((64, 64, 3), 128, dtype=np.uint8)
+    assert assess_image_quality(image)["warnings"] == []
 
 
 def test_cv_threshold_is_job_local_and_keeps_grow_below_seed() -> None:

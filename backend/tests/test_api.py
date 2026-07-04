@@ -235,6 +235,33 @@ def test_cors_allows_image_settings_patch(tmp_path: Path) -> None:
         )
         assert response.status_code == 200
         assert "PATCH" in response.headers["access-control-allow-methods"]
+        assert "DELETE" in response.headers["access-control-allow-methods"]
+
+
+def test_cache_settings_and_clear_history(tmp_path: Path) -> None:
+    app = create_app(config(tmp_path), processor=FakeProcessor())
+    with TestClient(app) as client:
+        payload = image_bytes(tmp_path)
+        created = client.post(
+            "/api/jobs",
+            files={"files": ("image.png", payload, "image/png")},
+            data={"settings": "{}"},
+        ).json()
+        wait_for_terminal(client, created["id"])
+
+        info = client.get("/api/cache")
+        assert info.status_code == 200
+        assert info.json()["stored_images"] == 1
+        assert info.json()["size_bytes"] > 0
+
+        updated = client.patch("/api/cache", json={"max_images": 20})
+        assert updated.status_code == 200
+        assert updated.json()["max_images"] == 20
+
+        cleared = client.delete("/api/cache")
+        assert cleared.status_code == 200
+        assert cleared.json()["stored_images"] == 0
+        assert cleared.json()["max_images"] == 20
 
 
 def test_explicit_demo_is_marked(tmp_path: Path) -> None:

@@ -2,20 +2,39 @@ import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from '
 import { Player } from '@remotion/player';
 import {
   ArrowRight,
-  Check,
   Clock3,
+  Database,
   FolderOpen,
   ImagePlus,
   Layers3,
-  ShieldCheck,
+  Trash2,
   UploadCloud,
   X,
 } from 'lucide-react';
 import { AmbientMineral } from './AmbientMineral';
-import { appendJobImages, createJob, getHistory, getJob, getResults, health, patchImageSettings, type HealthState } from './api';
+import {
+  appendJobImages,
+  clearCache,
+  createJob,
+  getCacheInfo,
+  getHistory,
+  getJob,
+  getResults,
+  health,
+  patchImageSettings,
+  updateCacheLimit,
+  type HealthState,
+} from './api';
 import { demoResults } from './demo';
 import { ProgressPanel } from './ProgressPanel';
-import { errorMessage, type HistoryItem, type Job, type JobResults, type JobSettings } from './types';
+import {
+  errorMessage,
+  type CacheInfo,
+  type HistoryItem,
+  type Job,
+  type JobResults,
+  type JobSettings,
+} from './types';
 import { Workspace } from './Workspace';
 
 const ACCEPTED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'];
@@ -72,6 +91,21 @@ function uniqueFiles(files: File[]) {
   });
 }
 
+function formatBytes(value: number): string {
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} КБ`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} ГБ`;
+}
+
+function imageWord(value: number): string {
+  const tens = value % 100;
+  const units = value % 10;
+  if (tens >= 11 && tens <= 14) return 'снимков';
+  if (units === 1) return 'снимок';
+  if (units >= 2 && units <= 4) return 'снимка';
+  return 'снимков';
+}
+
 export function App() {
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -82,6 +116,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<HistoryItem[]>([]);
+  const [cacheInfo, setCacheInfo] = useState<CacheInfo | null>(null);
+  const [cacheLimit, setCacheLimit] = useState(50);
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheError, setCacheError] = useState<string | null>(null);
   const [scrollY, setScrollY] = useState(0);
   const [requestedImageId, setRequestedImageId] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get('image'),
@@ -107,7 +145,13 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController();
     void health(controller.signal).then(setService);
-    void getHistory().then(setHistoryEntries).catch(() => setHistoryEntries([]));
+    void getHistory(500).then(setHistoryEntries).catch(() => setHistoryEntries([]));
+    void getCacheInfo()
+      .then((info) => {
+        setCacheInfo(info);
+        setCacheLimit(info.max_images);
+      })
+      .catch(() => setCacheInfo(null));
     return () => controller.abort();
   }, []);
 
@@ -172,7 +216,8 @@ export function App() {
         }
         if (fresh.status === 'completed' || fresh.status === 'partial_failed') {
           setResults(partialResults);
-          void getHistory().then(setHistoryEntries).catch(() => undefined);
+          void getHistory(500).then(setHistoryEntries).catch(() => undefined);
+          void getCacheInfo().then(setCacheInfo).catch(() => undefined);
         } else if (fresh.status === 'failed' || fresh.status === 'model_unavailable') {
           setError(errorMessage(fresh.error, 'Не удалось обработать изображения.'));
         }
@@ -209,7 +254,7 @@ export function App() {
       setUploadProgress(null);
       setRequestedImageId(null);
       window.history.pushState(null, '', `?job=${encodeURIComponent(created.id)}`);
-      void getHistory().then(setHistoryEntries).catch(() => undefined);
+      void getHistory(500).then(setHistoryEntries).catch(() => undefined);
       setService((current) => current ? { ...current, reachable: true } : current);
     } catch (reason) {
       setUploadProgress(null);
@@ -227,7 +272,7 @@ export function App() {
     if (nextSettings) setSettings(nextSettings);
     setRequestedImageId(null);
     window.history.pushState(null, '', window.location.pathname);
-    void getHistory().then(setHistoryEntries).catch(() => undefined);
+    void getHistory(500).then(setHistoryEntries).catch(() => undefined);
   };
 
   if (results) {
@@ -259,7 +304,8 @@ export function App() {
 
   return (
     <main className="landing">
-      <div className="ambient" style={{ transform: `translate3d(0, ${scrollY * 0.08}px, 0) scale(1.02)` }}>
+      <section className="landing-hero">
+      <div className="ambient" style={{ transform: `translate3d(0, ${scrollY * 0.12}px, 0) scale(1.08)` }}>
         <Player
           component={AmbientMineral}
           compositionWidth={1728}
@@ -274,8 +320,8 @@ export function App() {
           style={{ width: '100%', height: '100%' }}
         />
       </div>
-      <div className="parallax-strata" aria-hidden="true" style={{ transform: `translate3d(0, ${scrollY * 0.16}px, 0)` }} />
-      <div className="landing-vignette" aria-hidden="true" style={{ transform: `translate3d(0, ${scrollY * 0.24}px, 0)` }} />
+      <div className="parallax-strata" aria-hidden="true" style={{ transform: `translate3d(0, ${scrollY * 0.22}px, 0)` }} />
+      <div className="landing-vignette" aria-hidden="true" style={{ transform: `translate3d(0, ${scrollY * 0.32}px, 0)` }} />
       <header className="landing-header">
         <a className="brand" href="/" aria-label="PyTorchi: Ore analyzer — главная">
           <span className="brand-mark"><Layers3 size={18} /></span>
@@ -296,7 +342,7 @@ export function App() {
       </header>
 
       <section className="landing-content">
-        <div className="hero-copy" style={{ translate: `0 ${scrollY * -0.05}px` }}>
+        <div className="hero-copy" style={{ transform: `translate3d(0, ${scrollY * -0.06}px, 0)` }}>
           <span className="eyebrow">КОМПЬЮТЕРНОЕ ЗРЕНИЕ · МИНЕРАЛОГИЯ</span>
           <h1>Состав руды.<br /><em>В деталях.</em></h1>
           <p>Загрузите микроскопические снимки — система выделит тальк и при его доле до 10% определит рядовой или труднообогатимый класс руды.</p>
@@ -447,44 +493,110 @@ export function App() {
         <span>v0.2 · TALC + ORE CLASSIFIER</span>
         <span>Изображения обрабатываются последовательно</span>
       </footer>
-      {historyEntries.length > 0 && (
-        <section className="history-section" aria-labelledby="history-title">
-          <div className="history-intro">
-            <span className="history-kicker"><Clock3 size={14} /> История сервиса</span>
-            <h2 id="history-title">Последние анализы</h2>
-            <p>Состояние и артефакты восстановятся по ссылке на задачу.</p>
-          </div>
-          <div className="history-list">
-            {historyEntries.map((entry) => (
+      </section>
+      <section className="history-section" aria-labelledby="history-title">
+        <div className="history-intro">
+          <span className="history-kicker"><Clock3 size={14} /> История сервиса</span>
+          <h2 id="history-title">Последние анализы</h2>
+          <p>Состояние и артефакты восстановятся по ссылке на задачу.</p>
+          <div className="cache-panel">
+            <div className="cache-summary">
+              <Database size={16} />
+              <span>
+                <strong>
+                  {cacheInfo?.stored_images ?? historyEntries.length}{' '}
+                  {imageWord(cacheInfo?.stored_images ?? historyEntries.length)}
+                </strong>
+                {cacheInfo ? ` · ${formatBytes(cacheInfo.size_bytes)}` : ''}
+              </span>
+            </div>
+            <label>
+              Хранить снимков
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={cacheLimit}
+                onChange={(event) => setCacheLimit(Number(event.target.value))}
+              />
+            </label>
+            <div className="cache-actions">
               <button
-                key={`${entry.job_id}:${entry.image_id}`}
                 type="button"
-                onClick={() => {
-                  setRequestedImageId(entry.image_id);
-                  const query = new URLSearchParams({ job: entry.job_id, image: entry.image_id });
-                  window.history.pushState(null, '', `?${query.toString()}`);
-                  void openJob(entry.job_id);
+                disabled={cacheBusy || cacheLimit < 1 || cacheLimit > 500}
+                onClick={async () => {
+                  setCacheBusy(true);
+                  setCacheError(null);
+                  try {
+                    const info = await updateCacheLimit(cacheLimit);
+                    setCacheInfo(info);
+                    setHistoryEntries(await getHistory(500));
+                  } catch (reason) {
+                    setCacheError(reason instanceof Error ? reason.message : 'Не удалось изменить кэш.');
+                  } finally {
+                    setCacheBusy(false);
+                  }
                 }}
               >
-                <span className="history-thumb">
-                  {entry.artifacts.original
-                    ? <img src={entry.artifacts.original} alt="" loading="lazy" />
-                    : <Layers3 size={16} />}
-                </span>
-                <strong>{entry.filename}</strong>
-                <small>
-                  {entry.classification?.label_ru ?? entry.status}
-                  {' · '}
-                  {new Date(entry.updated_at).toLocaleString('ru-RU')}
-                  {' · '}
-                  тальк {Number(entry.talc?.talc_percent ?? entry.talc?.refined_percent ?? 0).toFixed(1)}%
-                </small>
-                <ArrowRight size={16} />
+                Сохранить лимит
               </button>
-            ))}
+              <button
+                className="cache-clear"
+                type="button"
+                disabled={cacheBusy || (cacheInfo?.stored_images ?? historyEntries.length) === 0}
+                onClick={async () => {
+                  if (!window.confirm('Удалить сохранённые снимки и результаты анализа?')) return;
+                  setCacheBusy(true);
+                  setCacheError(null);
+                  try {
+                    const info = await clearCache();
+                    setCacheInfo(info);
+                    setHistoryEntries([]);
+                  } catch (reason) {
+                    setCacheError(reason instanceof Error ? reason.message : 'Не удалось очистить кэш.');
+                  } finally {
+                    setCacheBusy(false);
+                  }
+                }}
+              >
+                <Trash2 size={14} /> Очистить
+              </button>
+            </div>
+            {cacheError && <p className="cache-error" role="alert">{cacheError}</p>}
           </div>
-        </section>
-      )}
+        </div>
+        <div className="history-list">
+          {historyEntries.length === 0 ? (
+            <p className="history-empty">Здесь появятся завершённые анализы.</p>
+          ) : historyEntries.map((entry) => (
+            <button
+              key={`${entry.job_id}:${entry.image_id}`}
+              type="button"
+              onClick={() => {
+                setRequestedImageId(entry.image_id);
+                const query = new URLSearchParams({ job: entry.job_id, image: entry.image_id });
+                window.history.pushState(null, '', `?${query.toString()}`);
+                void openJob(entry.job_id);
+              }}
+            >
+              <span className="history-thumb">
+                {entry.artifacts.original
+                  ? <img src={entry.artifacts.original} alt="" loading="lazy" />
+                  : <Layers3 size={16} />}
+              </span>
+              <strong>{entry.filename}</strong>
+              <small>
+                {entry.classification?.label_ru ?? entry.status}
+                {' · '}
+                {new Date(entry.updated_at).toLocaleString('ru-RU')}
+                {' · '}
+                тальк {Number(entry.talc?.talc_percent ?? entry.talc?.refined_percent ?? 0).toFixed(1)}%
+              </small>
+              <ArrowRight size={16} />
+            </button>
+          ))}
+        </div>
+      </section>
     </main>
   );
 }

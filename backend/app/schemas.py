@@ -93,6 +93,7 @@ class ResultItem(BaseModel):
     error: dict | None = None
     settings: JobSettings | None = None
     progress: ImageProgress | None = None
+    warnings: list[dict] = Field(default_factory=list)
 
 
 class JobResults(BaseModel):
@@ -124,7 +125,21 @@ class HistoryItem(BaseModel):
     error: dict | None = None
     progress: Progress
     images: list[ImageState]
+    warnings: list[dict] = Field(default_factory=list)
 
 
 class ImageHistory(BaseModel):
     items: list[HistoryItem]
+
+
+class CacheSettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_images: int = Field(ge=1, le=500)
+
+
+class CacheInfo(BaseModel):
+    max_images: int
+    stored_images: int
+    active_images: int
+    size_bytes: int

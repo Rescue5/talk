@@ -27,6 +27,41 @@ def save_png(path: Path, array: np.ndarray) -> None:
     Image.fromarray(array).save(path, **PNG_SAVE_OPTIONS)
 
 
+def assess_image_quality(image_rgb: np.ndarray) -> dict[str, Any]:
+    """Return inexpensive exposure diagnostics used to warn about unstable input."""
+
+    image = np.asarray(image_rgb)
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("image_rgb must have shape HxWx3")
+    sample = image[::4, ::4].astype(np.float32) / 255.0
+    luminance = (
+        0.2126 * sample[..., 0]
+        + 0.7152 * sample[..., 1]
+        + 0.0722 * sample[..., 2]
+    )
+    median = float(np.median(luminance))
+    mean = float(np.mean(luminance))
+    dark_fraction = float(np.mean(luminance < 0.18))
+    warnings: list[dict[str, Any]] = []
+    if dark_fraction >= 0.60 or median < 0.13:
+        warnings.append(
+            {
+                "code": "underexposed_image",
+                "severity": "warning",
+                "message": (
+                    "Изображение слишком тёмное: сегментация и классификация "
+                    "могут быть нестабильными. По возможности увеличьте экспозицию."
+                ),
+            }
+        )
+    return {
+        "mean_luminance": mean,
+        "median_luminance": median,
+        "dark_pixel_fraction": dark_fraction,
+        "warnings": warnings,
+    }
+
+
 def save_semantic_overlays(
     output_dir: Path,
     segmentation_mask: np.ndarray,
@@ -621,6 +656,7 @@ class InferenceProcessor:
                 np.asarray(ImageOps.exif_transpose(source).convert("RGB"))
             )
         load_seconds = perf_counter() - started
+        quality = assess_image_quality(image)
 
         cached_manifest: dict[str, Any] = {}
         if reuse_segmentation:
@@ -786,6 +822,7 @@ class InferenceProcessor:
                 "statistics": statistics_seconds,
             },
             "sulfide_segmentation": sulfide_segmentation,
+            "quality": quality,
         }
         talc_public = {
             **classification,
@@ -896,6 +933,7 @@ class InferenceProcessor:
             "sulfide": sulfide,
             "sulfide_segmentation": sulfide_segmentation,
             "sulfide_error": sulfide_error,
+            "warnings": quality["warnings"],
             "timings": final_manifest["timings_seconds"],
             "error": unavailable,
             "artifacts": {
@@ -1024,6 +1062,7 @@ class InferenceProcessor:
             "sulfide": sulfide,
             "sulfide_segmentation": manifest.get("sulfide_segmentation"),
             "sulfide_error": manifest.get("sulfide_error"),
+            "warnings": manifest.get("quality", {}).get("warnings", []),
             "timings": manifest["timings_seconds"],
             "error": unavailable,
             "artifacts": artifacts,
@@ -1041,6 +1080,7 @@ class InferenceProcessor:
         started = perf_counter()
         with Image.open(image_path) as source:
             image = np.asarray(ImageOps.exif_transpose(source).convert("RGB"))
+        quality = assess_image_quality(image)
         progress("talc_segmentation", 0.1, "DEMO: creating illustrative mask")
         gray = image.astype(np.float32).mean(axis=2)
         segmentation = gray < float(np.percentile(gray, 45))
@@ -1166,6 +1206,7 @@ class InferenceProcessor:
             "classification": talc,
             "sulfide": sulfide,
             "sulfide_segmentation": sulfide_segmentation,
+            "quality": quality,
             "ore_classification": final,
             "timings_seconds": timings,
             "artifacts": {
@@ -1191,6 +1232,7 @@ class InferenceProcessor:
             "talc": talc,
             "sulfide": sulfide,
             "sulfide_segmentation": sulfide_segmentation,
+            "warnings": quality["warnings"],
             "timings": timings,
             "error": None,
             "artifacts": {

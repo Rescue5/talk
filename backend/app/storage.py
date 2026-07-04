@@ -24,10 +24,31 @@ class JobStore:
     def __init__(self, root: str | Path, max_history: int = 50) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.max_history = max(1, min(int(max_history), 50))
+        self._settings_path = self.root / "cache-settings.json"
+        self.max_history = max(1, min(int(max_history), 500))
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._load_settings()
         self._load()
+
+    def _load_settings(self) -> None:
+        try:
+            with self._settings_path.open("r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            self.max_history = max(
+                1, min(int(payload.get("max_images", self.max_history)), 500)
+            )
+        except (OSError, ValueError, TypeError):
+            return
+
+    def _persist_settings(self) -> None:
+        temporary = self._settings_path.with_suffix(".json.tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump({"max_images": self.max_history}, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, self._settings_path)
 
     def _load(self) -> None:
         for manifest in self.root.glob("*/job.json"):
@@ -240,6 +261,7 @@ class JobStore:
                             "created_at": image["created_at"],
                             "updated_at": image["updated_at"],
                             "error": result.get("error"),
+                            "warnings": result.get("warnings", []),
                             "progress": {
                                 "percent": 100.0,
                                 "stage": image["status"],
@@ -312,6 +334,64 @@ class JobStore:
                         for image in job["images"]
                     )
                     self._persist(job)
+
+    def set_max_history(self, max_images: int) -> None:
+        with self._lock:
+            self.max_history = max(1, min(int(max_images), 500))
+            self._persist_settings()
+            self.prune()
+
+    def clear_history(self) -> None:
+        with self._lock:
+            terminal_count = sum(
+                image["status"] in {"completed", "failed", "model_unavailable"}
+                for job in self._jobs.values()
+                for image in job["images"]
+            )
+            previous = self.max_history
+            self.max_history = 0
+            try:
+                self.prune()
+            finally:
+                self.max_history = previous
+            if terminal_count:
+                self._persist_settings()
+
+    def cache_info(self) -> dict[str, int]:
+        with self._lock:
+            stored = 0
+            active = 0
+            size_bytes = 0
+            terminal_statuses = {"completed", "failed", "model_unavailable"}
+            for job in self._jobs.values():
+                for image in job["images"]:
+                    if image["status"] not in terminal_statuses:
+                        active += 1
+                        continue
+                    stored += 1
+                    upload = (
+                        self.root
+                        / str(job["id"])
+                        / "uploads"
+                        / image.get("stored_name", "")
+                    )
+                    if upload.is_file():
+                        size_bytes += upload.stat().st_size
+                    artifact_dir = (
+                        self.root / str(job["id"]) / "artifacts" / image["image_id"]
+                    )
+                    if artifact_dir.is_dir():
+                        size_bytes += sum(
+                            path.stat().st_size
+                            for path in artifact_dir.rglob("*")
+                            if path.is_file()
+                        )
+            return {
+                "max_images": self.max_history,
+                "stored_images": stored,
+                "active_images": active,
+                "size_bytes": size_bytes,
+            }
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self._lock:

@@ -1,4 +1,4 @@
-import type { HistoryItem, Job, JobResults, JobSettings } from './types';
+import type { CacheInfo, HistoryItem, Job, JobResults, JobSettings } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/$/, '');
 
@@ -102,9 +102,29 @@ export async function getResults(id: string): Promise<JobResults> {
 
 export async function getHistory(limit = 50): Promise<HistoryItem[]> {
   const payload = await readJson<HistoryItem[] | { items?: HistoryItem[] }>(
-    await fetch(`${API_BASE}/history?limit=${Math.max(1, Math.min(50, limit))}`),
+    await fetch(`${API_BASE}/history?limit=${Math.max(1, Math.min(500, limit))}`),
   );
   return Array.isArray(payload) ? payload : payload.items ?? [];
+}
+
+export async function getCacheInfo(): Promise<CacheInfo> {
+  return readJson<CacheInfo>(await fetch(`${API_BASE}/cache`));
+}
+
+export async function updateCacheLimit(maxImages: number): Promise<CacheInfo> {
+  return readJson<CacheInfo>(
+    await fetch(`${API_BASE}/cache`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_images: maxImages }),
+    }),
+  );
+}
+
+export async function clearCache(): Promise<CacheInfo> {
+  return readJson<CacheInfo>(
+    await fetch(`${API_BASE}/cache`, { method: 'DELETE' }),
+  );
 }
 
 export async function patchImageSettings(

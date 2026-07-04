@@ -78,8 +78,12 @@ def merge_tile_predictions(
     height: int,
     predictions: list[tuple[TileWindow, np.ndarray]],
     threshold: float,
+    blend_margin: int = 0,
 ) -> SegmentationResult:
     probability_sum = np.zeros((height, width), dtype=np.float32)
+    probability_weighted_sum = np.zeros((height, width), dtype=np.float32)
+    positive_weight = np.zeros((height, width), dtype=np.float32)
+    weight_sum = np.zeros((height, width), dtype=np.float32)
     positive_votes = np.zeros((height, width), dtype=np.uint32)
     vote_count = np.zeros((height, width), dtype=np.uint32)
     for window, probability in predictions:
@@ -87,16 +91,40 @@ def merge_tile_predictions(
             raise ValueError("Tile probability shape does not match its window")
         ys = slice(window.y, window.y + window.height)
         xs = slice(window.x, window.x + window.width)
-        probability_sum[ys, xs] += probability.astype(np.float32, copy=False)
-        positive_votes[ys, xs] += probability >= threshold
+        probability_float = probability.astype(np.float32, copy=False)
+        positive = probability_float >= threshold
+        probability_sum[ys, xs] += probability_float
+        positive_votes[ys, xs] += positive
         vote_count[ys, xs] += 1
+        weights = _tile_reliability(
+            window,
+            image_width=width,
+            image_height=height,
+            blend_margin=blend_margin,
+        )
+        probability_weighted_sum[ys, xs] += probability_float * weights
+        positive_weight[ys, xs] += positive * weights
+        weight_sum[ys, xs] += weights
     if np.any(vote_count == 0):
         raise RuntimeError("Tile windows did not cover the entire image")
-    confidence = probability_sum / vote_count
-    doubled = positive_votes * 2
-    mask = (doubled > vote_count) | (
-        (doubled == vote_count) & (confidence >= threshold)
+    if np.any(weight_sum <= 0):
+        raise RuntimeError("Tile blending weights did not cover the entire image")
+    confidence = (
+        probability_weighted_sum / weight_sum
+        if blend_margin > 0
+        else probability_sum / vote_count
     )
+    if blend_margin > 0:
+        doubled_weight = positive_weight * 2.0
+        mask = (doubled_weight > weight_sum) | (
+            np.isclose(doubled_weight, weight_sum, rtol=0.0, atol=1.0e-6)
+            & (confidence >= threshold)
+        )
+    else:
+        doubled = positive_votes * 2
+        mask = (doubled > vote_count) | (
+            (doubled == vote_count) & (confidence >= threshold)
+        )
     max_votes = int(vote_count.max())
     count_dtype = np.uint16 if max_votes <= np.iinfo(np.uint16).max else np.uint32
     return SegmentationResult(
@@ -106,6 +134,36 @@ def merge_tile_predictions(
         vote_count=vote_count.astype(count_dtype),
         tile_count=len(predictions),
     )
+
+
+def _tile_reliability(
+    window: TileWindow,
+    *,
+    image_width: int,
+    image_height: int,
+    blend_margin: int,
+) -> np.ndarray:
+    """Reduce neural edge artefacts while keeping image-border predictions intact."""
+
+    weights_y = np.ones(window.height, dtype=np.float32)
+    weights_x = np.ones(window.width, dtype=np.float32)
+    margin_x = min(max(0, blend_margin), max(0, window.width // 2))
+    margin_y = min(max(0, blend_margin), max(0, window.height // 2))
+
+    def ramp(length: int) -> np.ndarray:
+        # Smoothstep avoids a visible derivative break where the reliable centre starts.
+        x = np.linspace(0.0, 1.0, length, endpoint=False, dtype=np.float32)
+        return np.maximum(x * x * (3.0 - 2.0 * x), np.float32(1.0e-3))
+
+    if margin_x and window.x > 0:
+        weights_x[:margin_x] *= ramp(margin_x)
+    if margin_x and window.x + window.width < image_width:
+        weights_x[-margin_x:] *= ramp(margin_x)[::-1]
+    if margin_y and window.y > 0:
+        weights_y[:margin_y] *= ramp(margin_y)
+    if margin_y and window.y + window.height < image_height:
+        weights_y[-margin_y:] *= ramp(margin_y)[::-1]
+    return weights_y[:, None] * weights_x[None, :]
 
 
 class TileSegmenter:
@@ -202,4 +260,9 @@ class TileSegmenter:
             height,
             predictions,
             self.checkpoint.threshold,
+            blend_margin=(
+                max(1, round(self.checkpoint.tile_size * self.overlap * 0.5))
+                if SegmentationMode(mode) is SegmentationMode.OVERLAP
+                else 0
+            ),
         )
