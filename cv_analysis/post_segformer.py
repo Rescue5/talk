@@ -729,7 +729,7 @@ class ComponentFilter(CVProcessor):
             metrics["elongation"]
             <= self.max_elongation
         )
-    
+
     def _passes_solidity(
         self,
         metrics: dict[str, Any],

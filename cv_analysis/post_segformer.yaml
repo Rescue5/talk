@@ -45,26 +45,27 @@ pipeline:
       max_weight: 0.65
       mean_weight: 0.35
 
-    weights:
-      local_log_darkness_norm: 0.35
-      local_zscore_norm: 0.20
-      blackhat_max_norm: 0.35
-      blackhat_persistence: 0.10
+      weights:
+        local_log_darkness_norm: 0.35
+        local_zscore_norm: 0.20
+        blackhat_max_norm: 0.35
+        blackhat_persistence: 0.10
 
-    vote_thresholds:
-      local_log_darkness_norm: 0.40
-      local_zscore_norm: 0.35
-      blackhat_max_norm: 0.40
-      blackhat_persistence: 0.25
+      vote_thresholds:
+        local_log_darkness_norm: 0.40
+        local_zscore_norm: 0.35
+        blackhat_max_norm: 0.40
+        blackhat_persistence: 0.25
 
   - type: hysteresis
     enabled: true
     params:
-      seed_threshold: 0.75
-      grow_threshold: 0.40
-      seed_min_evidence: 3
+      seed_threshold: 0.55
+      strong_response_threshold: 0.68
+      grow_threshold: 0.20
+      seed_min_evidence: 1
       grow_min_evidence: 1
-      min_seed_area: 3
+      min_seed_area: 1
       connectivity: 8
 
   - type: morphology_cleanup
