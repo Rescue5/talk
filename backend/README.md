@@ -63,14 +63,14 @@ JSON string in `settings`:
 ```bash
 curl -X POST http://localhost:8000/api/jobs \
   -F 'files=@sample.jpg' \
-  -F 'settings={"mode":"overlap","segmentation_threshold":0.5,"cv_threshold":0.55,"talc_threshold_percent":10,"sulfide_threshold":0.5}'
+  -F 'settings={"mode":"overlap","segmentation_threshold":0.5,"cv_threshold":0.35,"talc_threshold_percent":10,"sulfide_threshold":0.5}'
 ```
 
 Thresholds are job-local and do not mutate the process-wide loaded models:
 
 - `segmentation_threshold` (`0..1`, default `0.5`) controls tile probability
   voting.
-- `cv_threshold` (`>0..1`, default `0.55`) overrides the CV hysteresis seed;
+- `cv_threshold` (`>0..1`, default `0.35`) overrides the CV hysteresis seed;
   the service keeps its grow threshold strictly lower and leaves the
   strong-response threshold intact.
 - `talc_threshold_percent` (`0..100`, default `10`) selects talc-bearing ore

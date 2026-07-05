@@ -19,7 +19,7 @@ class JobSettings(BaseModel):
 
     mode: Literal["overlap", "no_overlap"] = "overlap"
     segmentation_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    cv_threshold: float = Field(default=0.55, gt=0.0, le=1.0)
+    cv_threshold: float = Field(default=0.35, gt=0.0, le=1.0)
     talc_threshold_percent: float = Field(default=10.0, ge=0.0, le=100.0)
     sulfide_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 

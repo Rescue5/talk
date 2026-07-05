@@ -58,7 +58,7 @@ def test_sulfide_confidence_matches_threshold_selected_class() -> None:
 def test_threshold_defaults_match_api_contract() -> None:
     settings = JobSettings()
     assert settings.segmentation_threshold == 0.5
-    assert settings.cv_threshold == 0.55
+    assert settings.cv_threshold == 0.35
 
 
 def test_underexposed_image_gets_stability_warning() -> None:

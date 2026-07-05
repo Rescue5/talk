@@ -65,11 +65,11 @@ cv:
     - type: hysteresis
       enabled: true
       params:
-        seed_threshold: 0.45
-        strong_response_threshold: 0.58
-        grow_threshold: 0.15
+        seed_threshold: 0.35
+        strong_response_threshold: 0.45
+        grow_threshold: 0.08
         seed_min_evidence: 1
-        grow_min_evidence: 1
+        grow_min_evidence: 0
         min_seed_area: 1
         connectivity: 8
 
@@ -83,7 +83,7 @@ cv:
             min_area: 4
           - type: fill_small_holes
             enabled: true
-            max_area: 4
+            max_area: 6
           - type: opening
             enabled: false
             kernel_size: 3
@@ -95,12 +95,12 @@ cv:
       enabled: true
       params:
         min_area: 1
-        max_area: 30000
-        shape_filter_min_area: 20
+        max_area: 2000000
+        shape_filter_min_area: 2000000
         max_elongation: 15.0
         min_solidity: 0.05
         ring_radius: 5
-        min_ring_pixels: 6
+        min_ring_pixels: 2000000
         insufficient_ring_policy: skip_filter
         min_ring_contrast: 0.0
         min_median_confidence: 0.0

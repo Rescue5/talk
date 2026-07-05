@@ -345,7 +345,7 @@ export function App() {
     talc_threshold_percent: 10,
     sulfide_threshold: 0.5,
     segmentation_threshold: 0.5,
-    cv_threshold: 0.55,
+    cv_threshold: 0.35,
   });
 
   const fileInput = useRef<HTMLInputElement>(null);
