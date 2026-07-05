@@ -9,7 +9,8 @@ import threading
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from time import perf_counter
+import shutil
+from time import perf_counter, time_ns
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -282,6 +283,217 @@ def combine_classification(
         "label_ru": sulfide["label_ru"],
         "confidence": sulfide["confidence"],
         "source": "sulfide_model",
+    }
+
+
+def _manual_mask_statistics(mask: np.ndarray) -> dict[str, Any]:
+    import cv2
+
+    binary = mask.astype(bool).astype(np.uint8)
+    count, _, stats, centroids = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
+    )
+    components = [
+        {
+            "label": label,
+            "area": int(stats[label, cv2.CC_STAT_AREA]),
+            "bbox": [
+                int(stats[label, cv2.CC_STAT_LEFT]),
+                int(stats[label, cv2.CC_STAT_TOP]),
+                int(stats[label, cv2.CC_STAT_WIDTH]),
+                int(stats[label, cv2.CC_STAT_HEIGHT]),
+            ],
+            "centroid": [
+                float(centroids[label, 0]),
+                float(centroids[label, 1]),
+            ],
+        }
+        for label in range(1, count)
+    ]
+    contours, hierarchy = cv2.findContours(
+        binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
+    )
+    contour_rows = []
+    if hierarchy is not None:
+        contour_rows = [
+            {
+                "id": index,
+                "points": contour.reshape(-1, 2).astype(int).tolist(),
+                "hierarchy": {
+                    "next": int(hierarchy[0, index, 0]),
+                    "previous": int(hierarchy[0, index, 1]),
+                    "first_child": int(hierarchy[0, index, 2]),
+                    "parent": int(hierarchy[0, index, 3]),
+                },
+            }
+            for index, contour in enumerate(contours)
+        ]
+    pixels = int(np.count_nonzero(binary))
+    total = int(binary.size)
+    return {
+        "pixel_count": pixels,
+        "fraction": pixels / total if total else 0.0,
+        "percent": pixels / total * 100.0 if total else 0.0,
+        "component_count": count - 1,
+        "components": components,
+        "contours": contour_rows,
+    }
+
+
+def _apply_polygon_edits(
+    base: np.ndarray,
+    polygons: list[dict[str, Any]],
+) -> np.ndarray:
+    import cv2
+
+    edited = np.asarray(base).astype(bool).copy()
+    height, width = edited.shape
+    for polygon in polygons:
+        points = polygon.get("points", [])
+        pixel_points = np.asarray(
+            [
+                [
+                    round(float(point["x"]) * max(0, width - 1)),
+                    round(float(point["y"]) * max(0, height - 1)),
+                ]
+                for point in points
+            ],
+            dtype=np.int32,
+        )
+        if len(pixel_points) < 3:
+            continue
+        layer = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(layer, [pixel_points], 1)
+        if polygon.get("operation") == "remove":
+            edited[layer.astype(bool)] = False
+        else:
+            edited[layer.astype(bool)] = True
+    return edited
+
+
+def apply_manual_talc_edits(
+    output_dir: Path,
+    settings: JobSettings,
+    polygons: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rebuild the final talc mask from the cached CV mask and manual polygons."""
+
+    started = perf_counter()
+    manifest_path = output_dir / "result.json"
+    mask_path = output_dir / "refined_talc_mask.png"
+    original_path = output_dir / "original.png"
+    if not manifest_path.is_file() or not mask_path.is_file() or not original_path.is_file():
+        raise FileNotFoundError("Talc mask artifacts are unavailable")
+
+    base_path = output_dir / "refined_talc_mask.base.png"
+    if not base_path.is_file():
+        shutil.copy2(mask_path, base_path)
+
+    base = np.asarray(Image.open(base_path).convert("L")) > 0
+    edited = _apply_polygon_edits(base, polygons)
+
+    with manifest_path.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    original = np.asarray(Image.open(original_path).convert("RGB"))
+    if original.shape[:2] != edited.shape:
+        raise ValueError("Original image and talc mask dimensions differ")
+
+    final_mask = edited.astype(np.uint8) * 255
+    save_png(mask_path, final_mask)
+    overlay = original.copy()
+    overlay[edited] = (
+        0.45 * overlay[edited].astype(np.float32)
+        + 0.55 * np.asarray([255, 40, 40], dtype=np.float32)
+    ).astype(np.uint8)
+    save_png(output_dir / "overlay.png", overlay)
+
+    sulfide_masks: dict[str, np.ndarray | None] = {"cv": None, "sam": None}
+    for key in ("cv", "sam"):
+        path = output_dir / f"sulfide_{key}_mask.png"
+        if not path.is_file():
+            continue
+        base_sulfide_path = output_dir / f"sulfide_{key}_mask.base.png"
+        if not base_sulfide_path.is_file():
+            shutil.copy2(path, base_sulfide_path)
+        sulfide = np.asarray(Image.open(base_sulfide_path).convert("L")) > 0
+        sulfide &= ~edited
+        sulfide_masks[key] = sulfide.astype(np.uint8) * 255
+        save_png(path, sulfide_masks[key])
+
+    save_semantic_overlays(
+        output_dir,
+        np.asarray(Image.open(output_dir / "segmentation_mask.png").convert("L")) > 0,
+        edited,
+        sulfide_masks["cv"],
+        sulfide_masks["sam"],
+    )
+
+    statistics = _manual_mask_statistics(edited)
+    percent = float(statistics["percent"])
+    talc = {
+        "code": (
+            "talc_bearing"
+            if percent > settings.talc_threshold_percent
+            else "non_talc_bearing"
+        ),
+        "label_ru": (
+            "оталькованная руда"
+            if percent > settings.talc_threshold_percent
+            else "НЕ оталькованная руда"
+        ),
+        "talc_percent": percent,
+        "threshold_percent": settings.talc_threshold_percent,
+        "rule": ">",
+        "margin_percent": percent - settings.talc_threshold_percent,
+        "coarse_percent": manifest.get("areas", {})
+        .get("segmentation", {})
+        .get("percent"),
+        "refined_percent": percent,
+    }
+    sulfide = manifest.get("sulfide")
+    final = combine_classification(talc, sulfide)
+    if manifest.get("demo") and final is not None:
+        final["source"] = "explicit_demo"
+
+    sulfide_segmentation = dict(manifest.get("sulfide_segmentation") or {})
+    areas = manifest.setdefault("areas", {})
+    areas["refined_talc"] = statistics
+    for key, mask in sulfide_masks.items():
+        if mask is None:
+            continue
+        summary = _sulfide_mask_summary(mask)
+        sulfide_segmentation[key] = summary
+        areas[f"sulfide_{key}"] = summary
+
+    manual_seconds = perf_counter() - started
+    manual_revision = str(time_ns())
+    manifest["classification"] = {
+        key: value
+        for key, value in talc.items()
+        if key not in {"coarse_percent", "refined_percent"}
+    }
+    manifest["ore_classification"] = final
+    manifest["sulfide_segmentation"] = sulfide_segmentation
+    manifest["manual_talc_edits"] = polygons
+    manifest["manual_edit_revision"] = manual_revision
+    manifest.setdefault("timings_seconds", {})["manual_refinement"] = manual_seconds
+    with manifest_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            manifest,
+            stream,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        stream.write("\n")
+
+    return {
+        "classification": final,
+        "talc": talc,
+        "sulfide_segmentation": sulfide_segmentation,
+        "timings": manifest["timings_seconds"],
+        "manual_talc_edits": polygons,
+        "manual_edit_revision": manual_revision,
     }
 
 
@@ -606,7 +818,23 @@ class InferenceProcessor:
         if recompute_from == "classification":
             return self._reclassify_cached(output_dir, settings, progress)
         if self.config.demo_mode:
-            return self._process_demo(image_path, output_dir, settings, progress)
+            manual_edits: list[dict[str, Any]] = []
+            manifest_path = output_dir / "result.json"
+            if manifest_path.is_file():
+                with manifest_path.open("r", encoding="utf-8") as stream:
+                    manual_edits = json.load(stream).get("manual_talc_edits", [])
+            for name in (
+                "refined_talc_mask.base.png",
+                "sulfide_cv_mask.base.png",
+                "sulfide_sam_mask.base.png",
+            ):
+                (output_dir / name).unlink(missing_ok=True)
+            item = self._process_demo(image_path, output_dir, settings, progress)
+            if manual_edits:
+                item.update(
+                    apply_manual_talc_edits(output_dir, settings, manual_edits)
+                )
+            return item
         return self._process_models(
             image_path,
             output_dir,
@@ -733,6 +961,21 @@ class InferenceProcessor:
         cv_seconds = perf_counter() - started
         if np.any(refined.mask.astype(bool) & ~segmentation.mask.astype(bool)):
             raise RuntimeError("CV refinement escaped the coarse segmentation mask")
+        manual_edits = cached_manifest.get("manual_talc_edits", [])
+        if manual_edits:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            save_png(
+                output_dir / "refined_talc_mask.base.png",
+                refined.mask.astype(np.uint8) * 255,
+            )
+            refined.mask = _apply_polygon_edits(
+                refined.mask, manual_edits
+            ).astype(np.uint8)
+            for name in (
+                "sulfide_cv_mask.base.png",
+                "sulfide_sam_mask.base.png",
+            ):
+                (output_dir / name).unlink(missing_ok=True)
 
         progress("sulfide_segmentation", 0.58, "Segmenting sulfide inclusions")
         sulfide_segmentation_config, segment_sulfides_fn = (
@@ -905,6 +1148,9 @@ class InferenceProcessor:
         final_manifest["sulfide_error"] = sulfide_error
         final_manifest["sulfide_segmentation"] = sulfide_segmentation
         final_manifest["ore_classification"] = final
+        if manual_edits:
+            final_manifest["manual_talc_edits"] = manual_edits
+            final_manifest["manual_edit_revision"] = str(time_ns())
         final_manifest.setdefault("artifacts", {})["original"] = "original.png"
         final_manifest["artifacts"]["coarse_overlay"] = "coarse_overlay.png"
         final_manifest["artifacts"]["talc_overlay"] = "talc_overlay.png"
@@ -935,6 +1181,8 @@ class InferenceProcessor:
             "sulfide_error": sulfide_error,
             "warnings": quality["warnings"],
             "timings": final_manifest["timings_seconds"],
+            "manual_talc_edits": manual_edits,
+            "manual_edit_revision": final_manifest.get("manual_edit_revision"),
             "error": unavailable,
             "artifacts": {
                 "original": "original.png",
@@ -1064,6 +1312,8 @@ class InferenceProcessor:
             "sulfide_error": manifest.get("sulfide_error"),
             "warnings": manifest.get("quality", {}).get("warnings", []),
             "timings": manifest["timings_seconds"],
+            "manual_talc_edits": manifest.get("manual_talc_edits", []),
+            "manual_edit_revision": manifest.get("manual_edit_revision"),
             "error": unavailable,
             "artifacts": artifacts,
         }

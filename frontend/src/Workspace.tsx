@@ -19,6 +19,7 @@ import {
   type JobResults,
   type JobSettings,
   type ResultItem,
+  type TalcEditPolygon,
 } from './types';
 import { CompositionChart, ThresholdChart, TimingChart } from './Charts';
 import { ImageViewer, type OverlayState } from './ImageViewer';
@@ -103,6 +104,8 @@ export function Workspace({
   onImageChange,
   onAppend,
   onPatchSettings,
+  onSaveTalcEdits,
+  onResetTalcEdits,
   onReset,
 }: {
   job: Job | null;
@@ -112,6 +115,8 @@ export function Workspace({
   onImageChange: (imageId: string) => void;
   onAppend: (files: File[], settings: JobSettings) => Promise<void>;
   onPatchSettings: (imageId: string, settings: JobSettings) => Promise<void>;
+  onSaveTalcEdits: (imageId: string, polygons: TalcEditPolygon[]) => Promise<void>;
+  onResetTalcEdits: (imageId: string) => Promise<void>;
   onReset: (settings?: JobSettings) => void;
 }) {
   const items = useMemo<ResultItem[]>(() => {
@@ -364,6 +369,11 @@ export function Workspace({
             artifacts={item.artifacts}
             overlays={{ ...overlays, sulfideMaskType: effectiveSulfideMaskType }}
             filename={item.filename}
+            manualEdits={item.manual_talc_edits}
+            manualEditRevision={item.manual_edit_revision}
+            editable={item.status === 'completed' && Boolean(item.artifacts.refined_talc_mask)}
+            onSaveEdits={(polygons) => onSaveTalcEdits(item.image_id, polygons)}
+            onResetEdits={() => onResetTalcEdits(item.image_id)}
           />
           <div className="summary-strip">
             <div><span>Тальк</span><strong>{talcPercent.toFixed(1)}%</strong></div>

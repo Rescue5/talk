@@ -1,4 +1,12 @@
-import type { CacheInfo, HistoryItem, Job, JobResults, JobSettings } from './types';
+import type {
+  CacheInfo,
+  HistoryItem,
+  Job,
+  JobResults,
+  JobSettings,
+  ResultItem,
+  TalcEditPolygon,
+} from './types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/$/, '');
 
@@ -157,5 +165,34 @@ export async function appendJobImages(
       method: 'POST',
       body,
     }),
+  );
+}
+
+export async function saveTalcEdits(
+  jobId: string,
+  imageId: string,
+  polygons: TalcEditPolygon[],
+): Promise<ResultItem> {
+  return readJson<ResultItem>(
+    await fetch(
+      `${API_BASE}/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageId)}/talc-edits`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ polygons }),
+      },
+    ),
+  );
+}
+
+export async function resetTalcEdits(
+  jobId: string,
+  imageId: string,
+): Promise<ResultItem> {
+  return readJson<ResultItem>(
+    await fetch(
+      `${API_BASE}/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageId)}/talc-edits`,
+      { method: 'DELETE' },
+    ),
   );
 }

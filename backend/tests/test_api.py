@@ -108,6 +108,47 @@ class ReprocessProcessor(FakeProcessor):
         return super().process(image_path, output_dir, settings, progress)
 
 
+class ManualEditProcessor(FakeProcessor):
+    def process(self, image_path, output_dir, settings, progress):
+        item = super().process(image_path, output_dir, settings, progress)
+        shape = np.asarray(Image.open(output_dir / "original.png")).shape[:2]
+        empty = np.zeros(shape, dtype=np.uint8)
+        Image.fromarray(empty).save(output_dir / "segmentation_mask.png")
+        Image.fromarray(empty).save(output_dir / "refined_talc_mask.png")
+        Image.fromarray(np.full(shape, 255, dtype=np.uint8)).save(
+            output_dir / "sulfide_cv_mask.png"
+        )
+        (output_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "demo": False,
+                    "areas": {"segmentation": {"percent": 0.0}},
+                    "classification": {"talc_percent": 0.0},
+                    "sulfide": {
+                        "code": "ordinary",
+                        "label_ru": "рядовая руда",
+                        "confidence": 0.8,
+                    },
+                    "sulfide_segmentation": {"selected": "cv"},
+                    "timings_seconds": {"pipeline_total": 0.01},
+                }
+            ),
+            encoding="utf-8",
+        )
+        item["artifacts"].update(
+            {
+                "segmentation_mask": "segmentation_mask.png",
+                "refined_talc_mask": "refined_talc_mask.png",
+                "sulfide_cv_mask": "sulfide_cv_mask.png",
+                "talc_overlay": "talc_overlay.png",
+                "coarse_overlay": "coarse_overlay.png",
+                "sulfide_cv_overlay": "sulfide_cv_overlay.png",
+                "overlay": "overlay.png",
+            }
+        )
+        return item
+
+
 def image_bytes(tmp_path: Path) -> bytes:
     path = tmp_path / "source.png"
     Image.fromarray(np.full((12, 16, 3), 128, dtype=np.uint8)).save(path)
@@ -235,7 +276,50 @@ def test_cors_allows_image_settings_patch(tmp_path: Path) -> None:
         )
         assert response.status_code == 200
         assert "PATCH" in response.headers["access-control-allow-methods"]
+        assert "PUT" in response.headers["access-control-allow-methods"]
         assert "DELETE" in response.headers["access-control-allow-methods"]
+
+
+def test_manual_talc_polygons_are_persisted_and_resettable(tmp_path: Path) -> None:
+    app = create_app(config(tmp_path), processor=ManualEditProcessor())
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/jobs",
+            files={"files": ("image.png", image_bytes(tmp_path), "image/png")},
+            data={"settings": "{}"},
+        ).json()
+        wait_for_terminal(client, created["id"])
+        image_id = client.get(
+            f"/api/jobs/{created['id']}/results"
+        ).json()["items"][0]["image_id"]
+        polygon = {
+            "operation": "add",
+            "points": [
+                {"x": 0.0, "y": 0.0},
+                {"x": 0.7, "y": 0.0},
+                {"x": 0.7, "y": 0.7},
+                {"x": 0.0, "y": 0.7},
+            ],
+        }
+
+        edited = client.put(
+            f"/api/jobs/{created['id']}/images/{image_id}/talc-edits",
+            json={"polygons": [polygon]},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["classification"]["code"] == "talc_bearing"
+        assert edited.json()["manual_talc_edits"] == [polygon]
+        persisted = client.get(
+            f"/api/jobs/{created['id']}/results"
+        ).json()["items"][0]
+        assert persisted["manual_talc_edits"] == [polygon]
+
+        reset = client.delete(
+            f"/api/jobs/{created['id']}/images/{image_id}/talc-edits"
+        )
+        assert reset.status_code == 200
+        assert reset.json()["talc"]["talc_percent"] == 0.0
+        assert reset.json()["manual_talc_edits"] == []
 
 
 def test_cache_settings_and_clear_history(tmp_path: Path) -> None:

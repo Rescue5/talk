@@ -93,6 +93,10 @@ Endpoints:
   in the JSON body.
 - `PATCH /api/jobs/{job_id}/images/{image_id}/settings` — patch one image;
   accepts either a full settings object or a partial object.
+- `PUT /api/jobs/{job_id}/images/{image_id}/talc-edits` — replace normalized
+  manual talc polygons using `add` and `remove` operations.
+- `DELETE /api/jobs/{job_id}/images/{image_id}/talc-edits` — clear manual
+  polygons and restore the cached CV-refined mask.
 - `GET /api/history?limit=50` — newest completed image records with job/image
   IDs, preview artifacts, classification, settings, and timestamps.
 - `GET /api/jobs/{job_id}/artifacts/{image_id}/{artifact_name}`

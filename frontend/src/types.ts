@@ -99,6 +99,16 @@ export type ArtifactSet = {
   [key: string]: string | undefined;
 };
 
+export type TalcEditPoint = {
+  x: number;
+  y: number;
+};
+
+export type TalcEditPolygon = {
+  operation: 'add' | 'remove';
+  points: TalcEditPoint[];
+};
+
 export type Metric = {
   talc_percent?: number;
   threshold_percent?: number;
@@ -143,6 +153,8 @@ export type ResultItem = {
   settings?: JobSettings;
   progress?: ImageProgress;
   warnings?: AnalysisWarning[];
+  manual_talc_edits?: TalcEditPolygon[];
+  manual_edit_revision?: string;
 };
 
 export type JobResults = {

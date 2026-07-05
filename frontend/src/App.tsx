@@ -30,6 +30,8 @@ import {
   getResults,
   health,
   patchImageSettings,
+  resetTalcEdits,
+  saveTalcEdits,
   updateCacheLimit,
   type HealthState,
 } from './api';
@@ -696,6 +698,26 @@ export function App() {
 
           setSettings(updated.settings ?? next);
           setJob(updated);
+        }}
+        onSaveTalcEdits={async (imageId, polygons) => {
+          const updated = await saveTalcEdits(results.job_id, imageId, polygons);
+          setResults((current) => current
+            ? {
+                ...current,
+                items: current.items.map((entry) =>
+                  entry.image_id === imageId ? updated : entry),
+              }
+            : current);
+        }}
+        onResetTalcEdits={async (imageId) => {
+          const updated = await resetTalcEdits(results.job_id, imageId);
+          setResults((current) => current
+            ? {
+                ...current,
+                items: current.items.map((entry) =>
+                  entry.image_id === imageId ? updated : entry),
+              }
+            : current);
         }}
       />
     );

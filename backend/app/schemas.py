@@ -143,3 +143,23 @@ class CacheInfo(BaseModel):
     stored_images: int
     active_images: int
     size_bytes: int
+
+
+class PolygonPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+
+
+class TalcEditPolygon(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["add", "remove"]
+    points: list[PolygonPoint] = Field(min_length=3, max_length=1000)
+
+
+class TalcEdits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    polygons: list[TalcEditPolygon] = Field(default_factory=list, max_length=500)

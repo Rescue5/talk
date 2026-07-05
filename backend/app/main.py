@@ -23,7 +23,7 @@ from pydantic import ValidationError
 
 from .config import ServiceConfig
 from .jobs import JobManager, Processor
-from .processor import InferenceProcessor
+from .processor import InferenceProcessor, apply_manual_talc_edits
 from .schemas import (
     CacheInfo,
     CacheSettingsPatch,
@@ -33,8 +33,9 @@ from .schemas import (
     JobResults,
     JobSettings,
     JobSettingsPatch,
+    TalcEdits,
 )
-from .storage import JobNotFound, JobStore
+from .storage import JobNotFound, JobStore, utc_now
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -181,7 +182,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(service_config.allowed_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -461,6 +462,102 @@ def create_app(
             "demo": job["demo"],
             "items": _result_items(job),
         }
+
+    def update_talc_edits(
+        job_id: str,
+        image_id: str,
+        request: Request,
+        payload: TalcEdits,
+    ) -> dict[str, Any]:
+        current_store: JobStore = request.app.state.store
+        try:
+            job = current_store.get(job_id)
+        except JobNotFound as error:
+            raise HTTPException(status_code=404, detail="Job not found") from error
+        image = next(
+            (
+                candidate
+                for candidate in job["images"]
+                if candidate["image_id"] == image_id
+            ),
+            None,
+        )
+        if image is None:
+            raise HTTPException(status_code=404, detail="Image not found")
+        if image["status"] != "completed":
+            raise HTTPException(
+                status_code=409,
+                detail="Manual talc editing is available for completed images only",
+            )
+        item = next(
+            (
+                candidate
+                for candidate in job["items"]
+                if candidate.get("image_id") == image_id
+            ),
+            None,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Result not found")
+        polygons = [
+            polygon.model_dump(mode="json") for polygon in payload.polygons
+        ]
+        output_dir = current_store.job_dir(job_id) / "artifacts" / image_id
+        try:
+            updated_fields = apply_manual_talc_edits(
+                output_dir,
+                JobSettings.model_validate(image["settings"]),
+                polygons,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "manual_edit_unavailable",
+                    "message": str(error),
+                },
+            ) from error
+        revision = utc_now()
+
+        def persist(state: dict[str, Any]) -> None:
+            stored = next(
+                candidate
+                for candidate in state["items"]
+                if candidate.get("image_id") == image_id
+            )
+            stored.update(updated_fields)
+            stored["manual_edit_revision"] = revision
+            stored_image = next(
+                candidate
+                for candidate in state["images"]
+                if candidate["image_id"] == image_id
+            )
+            stored_image["updated_at"] = revision
+            state["updated_at"] = revision
+
+        updated_job = current_store.update(job_id, persist)
+        return next(
+            candidate
+            for candidate in _result_items(updated_job)
+            if candidate["image_id"] == image_id
+        )
+
+    @application.put("/api/jobs/{job_id}/images/{image_id}/talc-edits")
+    def put_talc_edits(
+        job_id: str,
+        image_id: str,
+        request: Request,
+        payload: TalcEdits = Body(...),
+    ) -> dict[str, Any]:
+        return update_talc_edits(job_id, image_id, request, payload)
+
+    @application.delete("/api/jobs/{job_id}/images/{image_id}/talc-edits")
+    def delete_talc_edits(
+        job_id: str,
+        image_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return update_talc_edits(job_id, image_id, request, TalcEdits())
 
     @application.get(
         "/api/jobs/{job_id}/artifacts/{image_id}/{artifact_name}",
