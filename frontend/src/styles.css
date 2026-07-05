@@ -336,7 +336,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .cache-summary strong { color: var(--ink); }
 .cache-panel label {
   display: grid;
-  grid-template-columns: 1fr 90px;
+  grid-template-columns: 1fr 223px;
   align-items: center;
   gap: 12px;
   margin-top: 16px;
@@ -448,7 +448,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 9px;
 }
 .append-button:hover { color: var(--accent-dark); border-color: var(--accent); background: #f8f5ed; }
-.visual-column { min-width: 0; display: grid; grid-template-rows: auto auto minmax(400px,1fr) auto; padding: 18px; gap: 12px; background: #e8e5dd; }
+.visual-column { min-width: 0; display: grid; grid-template-rows: auto auto minmax(400px,1fr) max-content; padding: 18px; gap: 12px; background: #e8e5dd; }
 .visual-alerts { display: grid; gap: 6px; }
 .visual-alerts:empty { display: none; }
 .visual-meta { display: flex; align-items: center; justify-content: space-between; }
@@ -493,7 +493,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .viewer-toolbar span { min-width: 51px; text-align: center; color: var(--muted); font: 400 9px/1 'IBM Plex Mono', monospace; }
 .viewer-hint { position: absolute; bottom: 8px; left: 12px; margin: 0; color: rgba(255,255,255,.45); font-size: 9px; pointer-events: none; }
 .viewer-empty { display: grid; place-items: center; gap: 8px; color: #777b75; font-size: 11px; }
-.summary-strip { display: grid; grid-template-columns: repeat(4,1fr); border: 1px solid var(--line); background: var(--paper); }
+.summary-strip { align-self: start; display: grid; grid-template-columns: repeat(4,1fr); border: 1px solid var(--line); background: var(--paper); }
 .summary-strip div { padding: 10px 13px; border-right: 1px solid var(--line); display: grid; gap: 2px; }
 .summary-strip div:last-child { border: 0; }
 .summary-strip span { color: var(--muted); font-size: 9px; }
@@ -616,7 +616,7 @@ input[type=range]::-webkit-slider-thumb { appearance: none; width: 13px; height:
   .workspace-header { height: 58px; padding: 0 12px; }
   .workspace-actions .secondary-button { font-size: 0; width: 36px; padding: 0; }
   .workspace-actions .secondary-button svg { margin: 0; }
-  .visual-column { padding: 10px; min-height: 590px; grid-template-rows: auto auto minmax(380px,1fr) auto; }
+  .visual-column { padding: 10px; min-height: 590px; grid-template-rows: auto auto minmax(380px,1fr) max-content; }
   .viewer { min-height: 380px; }
   .summary-strip { grid-template-columns: repeat(2,1fr); }
   .summary-strip div:nth-child(2) { border-right: 0; }
