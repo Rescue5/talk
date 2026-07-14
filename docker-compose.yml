@@ -1,0 +1,72 @@
+name: talk-app
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+        TORCH_SUFFIX: +cpu
+    init: true
+    restart: unless-stopped
+    environment:
+      MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
+      JOBS_DATA_DIR: /app/data/jobs
+      TALC_CHECKPOINT_PATH: /models/${TALC_CHECKPOINT_FILE:-talc.pt}
+      SULFIDE_CHECKPOINT_PATH: /models/${SULFIDE_CHECKPOINT_FILE:-sulfide.pt}
+      SULFIDE_SAM_CHECKPOINT_PATH: /models/${SULFIDE_SAM_CHECKPOINT_FILE:-mobile_sam.pt}
+      SULFIDE_SAM_DEVICE: ${SULFIDE_SAM_DEVICE:-auto}
+      CV_NUM_THREADS: ${CV_NUM_THREADS:-8}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-536870912}
+    volumes:
+      - type: bind
+        source: ${MODEL_DIR:-./models}
+        target: /models
+        read_only: true
+      - type: volume
+        source: jobs_data
+        target: /app/data/jobs
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 7s
+      retries: 5
+      start_period: 120s
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${APP_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - internal
+
+volumes:
+  jobs_data:
+
+networks:
+  internal:
+    driver: bridge

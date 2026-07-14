@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.11.11-slim-bookworm AS runtime
+
+ARG TORCH_VERSION=2.3.1
+ARG TORCHVISION_VERSION=0.18.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_SUFFIX=+cpu
+ARG TARGETARCH
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/talk_app/backend
+
+COPY backend/requirements.lock /tmp/requirements.lock
+RUN python -m pip install --upgrade "pip==25.0.1" \
+    && if [ "${TARGETARCH}" = "amd64" ]; then \
+      python -m pip install \
+        --index-url "${TORCH_INDEX_URL}" \
+        "torch==${TORCH_VERSION}${TORCH_SUFFIX}" \
+        "torchvision==${TORCHVISION_VERSION}${TORCH_SUFFIX}"; \
+    else \
+      python -m pip install \
+        "torch==${TORCH_VERSION}" \
+        "torchvision==${TORCHVISION_VERSION}"; \
+    fi \
+    && python -m pip install -r /tmp/requirements.lock
+
+COPY --chown=10001:10001 backend/ /workspace/talk_app/backend/
+RUN mkdir -p /app/data/jobs \
+    && chown -R 10001:10001 /app/data
+
+USER 10001:10001
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

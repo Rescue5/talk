@@ -1,0 +1,31 @@
+preprocessing:
+  input_color: rgb
+  blur_kernel: 3
+
+thresholds:
+  otsu_offset: -5
+
+morphology:
+  connectivity: 8
+  open_kernel: 0
+  close_kernel: 3
+  fill_holes_area: 0
+  min_component_area: 20
+
+sam:
+  enabled: true
+  checkpoint: ""
+  device: auto
+  min_area: 80
+  max_components: 20
+  box_padding: 20
+  box_padding_ratio: 0.15
+  max_positive_points: 2
+  min_coverage: 0.65
+  min_area_ratio: 0.50
+  max_area_ratio: 3.00
+  prefer_larger_mask: false
+
+overlay:
+  color_rgb: [255, 180, 40]
+  alpha: 0.65
